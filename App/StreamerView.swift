@@ -1,4 +1,4 @@
-import SwiftUI
+﻿import SwiftUI
 import AVFoundation
 
 struct StreamerView: View {
@@ -8,6 +8,22 @@ struct StreamerView: View {
     private func maxFPSForPending() -> Int {
         Int(streamer.maxSupportedFPS(width: pending.resolution.width,
                                      height: pending.resolution.height).rounded(.down))
+    }
+
+    private func controlPortForPending() -> UInt16 {
+        pending.port == UInt16.max ? pending.port : pending.port &+ 1
+    }
+
+    private func normalizeAutoBitrateBounds() {
+        if pending.minBitrate > pending.maxBitrate {
+            pending.maxBitrate = pending.minBitrate
+        }
+        if pending.bitrate < pending.minBitrate {
+            pending.bitrate = pending.minBitrate
+        }
+        if pending.bitrate > pending.maxBitrate {
+            pending.bitrate = pending.maxBitrate
+        }
     }
 
     var body: some View {
@@ -49,7 +65,8 @@ struct StreamerView: View {
                     // Baseline => CAVLC
                     if pending.profile == .baseline { pending.entropy = .cavlc }
 
-                    streamer.applyOrRestart(with: pending) // ⬅️ live ou restart selon le diff
+                    normalizeAutoBitrateBounds()
+                    streamer.applyOrRestart(with: pending)
                 }
                 .buttonStyle(.bordered)
                 .disabled(streamer.isBusy)
@@ -67,14 +84,21 @@ struct StreamerView: View {
                 HStack {
                     Text("Port")
                     Spacer()
-                    Stepper(value: $pending.port, in: 1024...65535, step: 1) {
+                    Stepper(value: $pending.port, in: 1024...65534, step: 1) {
                         Text("\(pending.port)")
                             .frame(minWidth: 60, alignment: .trailing)
                     }
                 }
+                HStack {
+                    Text("Control API")
+                    Spacer()
+                    Text("\(controlPortForPending())")
+                        .font(.system(.body, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
                 Picker("Protocol", selection: $pending.outputProtocol) {
-                    Text("H.264 Annex-B (recommandé)").tag(OutputProtocol.annexb)
-                    Text("H.264 AVCC (expérimental)").tag(OutputProtocol.avcc)
+                    Text("H.264 Annex-B (recommended)").tag(OutputProtocol.annexb)
+                    Text("H.264 AVCC (experimental)").tag(OutputProtocol.avcc)
                 }
                 .pickerStyle(.segmented)
             }
@@ -92,7 +116,7 @@ struct StreamerView: View {
                 }
                 .pickerStyle(.segmented)
 
-                Text("Max FPS supporté (device): \(maxFPSForPending())")
+                Text("Device max FPS: \(maxFPSForPending())")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
@@ -106,20 +130,38 @@ struct StreamerView: View {
                 HStack {
                     Text("Bitrate: \(Int(pending.bitrate/1_000_000)) Mb/s")
                     Slider(value: $pending.bitrate,
-                           in: 5_000_000...120_000_000,
+                           in: 2_000_000...240_000_000,
                            step: 1_000_000)
                 }
 
-                Toggle("All-I (GOP=1, latence minimale)", isOn: $pending.intraOnly)
+                Toggle("Auto bitrate (link adaptive)", isOn: $pending.autoBitrate)
+
+                if pending.autoBitrate {
+                    HStack {
+                        Text("Auto min: \(Int(pending.minBitrate/1_000_000)) Mb/s")
+                        Slider(value: $pending.minBitrate,
+                               in: 2_000_000...120_000_000,
+                               step: 1_000_000)
+                    }
+
+                    HStack {
+                        Text("Auto max: \(Int(pending.maxBitrate/1_000_000)) Mb/s")
+                        Slider(value: $pending.maxBitrate,
+                               in: 2_000_000...240_000_000,
+                               step: 1_000_000)
+                    }
+                }
+
+                Toggle("All-I (GOP=1, minimum latency)", isOn: $pending.intraOnly)
 
                 Picker("Orientation", selection: $pending.orientation) {
                     Text("Portrait").tag(AVCaptureVideoOrientation.portrait)
-                    Text("Paysage droite").tag(AVCaptureVideoOrientation.landscapeRight)
-                    Text("Paysage gauche").tag(AVCaptureVideoOrientation.landscapeLeft)
+                    Text("Landscape right").tag(AVCaptureVideoOrientation.landscapeRight)
+                    Text("Landscape left").tag(AVCaptureVideoOrientation.landscapeLeft)
                 }
                 .pickerStyle(.segmented)
 
-                Toggle("Auto-rotate (suivre l’orientation)", isOn: $pending.autoRotate)
+                Toggle("Auto-rotate", isOn: $pending.autoRotate)
             }
 
             Divider()
@@ -144,7 +186,7 @@ struct StreamerView: View {
                 .disabled(pending.profile == .baseline)
 
                 if pending.profile == .baseline {
-                    Text("Baseline impose CAVLC (CABAC indisponible)")
+                    Text("Baseline forces CAVLC (CABAC unavailable)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -152,10 +194,15 @@ struct StreamerView: View {
 
             Divider()
 
-            Text("Astuce : après Apply, lance `iproxy \(pending.port) \(pending.port)` puis `ffplay -fflags nobuffer -flags low_delay -probesize 2048 -analyzeduration 0 -vsync drop -use_wallclock_as_timestamps 1 -i tcp://127.0.0.1:\(pending.port)?tcp_nodelay=1`.")
+            Text("Tip: after Apply, run `iproxy \(pending.port) \(pending.port)` then `ffplay -fflags nobuffer -flags low_delay -probesize 2048 -analyzeduration 0 -vsync drop -use_wallclock_as_timestamps 1 -i tcp://127.0.0.1:\(pending.port)?tcp_nodelay=1`.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .lineLimit(3)
+                .minimumScaleFactor(0.9)
+            Text("Remote control: `iproxy \(controlPortForPending()) \(controlPortForPending())` then send JSON lines to tcp://127.0.0.1:\(controlPortForPending()).")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
                 .minimumScaleFactor(0.9)
         }
     }

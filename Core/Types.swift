@@ -26,13 +26,16 @@ struct PendingConfig {
     var port: UInt16 = 5000
     var resolution: Resolution = .r1080p
     var fps: Double = 120
-    var bitrate: Double = 60_000_000
-    var intraOnly: Bool = true
+    var bitrate: Double = 35_000_000
+    var intraOnly: Bool = false
     var outputProtocol: OutputProtocol = .annexb
     var orientation: AVCaptureVideoOrientation = .portrait
     var autoRotate: Bool = false
-    var profile: H264Profile = .baseline
-    var entropy: H264Entropy = .cavlc
+    var profile: H264Profile = .high
+    var entropy: H264Entropy = .cabac
+    var autoBitrate: Bool = true
+    var minBitrate: Double = 6_000_000
+    var maxBitrate: Double = 120_000_000
 
     init() {}
 
@@ -48,5 +51,8 @@ struct PendingConfig {
         autoRotate = s.autoRotate
         profile = s.profile
         entropy = s.entropy
+        autoBitrate = s.autoBitrate
+        minBitrate = Double(s.minBitrate)
+        maxBitrate = Double(s.maxBitrate)
     }
 }

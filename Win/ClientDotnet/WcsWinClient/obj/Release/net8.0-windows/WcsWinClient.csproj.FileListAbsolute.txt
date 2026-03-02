@@ -1,0 +1,15 @@
+C:\Users\lilian.pigassou\OneDrive - Dashperf\Documents\GitHub\WinCamStream\Win\ClientDotnet\WcsWinClient\bin\Release\net8.0-windows\WcsWinClient.exe
+C:\Users\lilian.pigassou\OneDrive - Dashperf\Documents\GitHub\WinCamStream\Win\ClientDotnet\WcsWinClient\bin\Release\net8.0-windows\WcsWinClient.deps.json
+C:\Users\lilian.pigassou\OneDrive - Dashperf\Documents\GitHub\WinCamStream\Win\ClientDotnet\WcsWinClient\bin\Release\net8.0-windows\WcsWinClient.runtimeconfig.json
+C:\Users\lilian.pigassou\OneDrive - Dashperf\Documents\GitHub\WinCamStream\Win\ClientDotnet\WcsWinClient\bin\Release\net8.0-windows\WcsWinClient.dll
+C:\Users\lilian.pigassou\OneDrive - Dashperf\Documents\GitHub\WinCamStream\Win\ClientDotnet\WcsWinClient\bin\Release\net8.0-windows\WcsWinClient.pdb
+C:\Users\lilian.pigassou\OneDrive - Dashperf\Documents\GitHub\WinCamStream\Win\ClientDotnet\WcsWinClient\obj\Release\net8.0-windows\WcsWinClient.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\lilian.pigassou\OneDrive - Dashperf\Documents\GitHub\WinCamStream\Win\ClientDotnet\WcsWinClient\obj\Release\net8.0-windows\WcsWinClient.AssemblyInfoInputs.cache
+C:\Users\lilian.pigassou\OneDrive - Dashperf\Documents\GitHub\WinCamStream\Win\ClientDotnet\WcsWinClient\obj\Release\net8.0-windows\WcsWinClient.AssemblyInfo.cs
+C:\Users\lilian.pigassou\OneDrive - Dashperf\Documents\GitHub\WinCamStream\Win\ClientDotnet\WcsWinClient\obj\Release\net8.0-windows\WcsWinClient.csproj.CoreCompileInputs.cache
+C:\Users\lilian.pigassou\OneDrive - Dashperf\Documents\GitHub\WinCamStream\Win\ClientDotnet\WcsWinClient\obj\Release\net8.0-windows\WcsWinClient.sourcelink.json
+C:\Users\lilian.pigassou\OneDrive - Dashperf\Documents\GitHub\WinCamStream\Win\ClientDotnet\WcsWinClient\obj\Release\net8.0-windows\WcsWinClient.dll
+C:\Users\lilian.pigassou\OneDrive - Dashperf\Documents\GitHub\WinCamStream\Win\ClientDotnet\WcsWinClient\obj\Release\net8.0-windows\refint\WcsWinClient.dll
+C:\Users\lilian.pigassou\OneDrive - Dashperf\Documents\GitHub\WinCamStream\Win\ClientDotnet\WcsWinClient\obj\Release\net8.0-windows\WcsWinClient.pdb
+C:\Users\lilian.pigassou\OneDrive - Dashperf\Documents\GitHub\WinCamStream\Win\ClientDotnet\WcsWinClient\obj\Release\net8.0-windows\WcsWinClient.genruntimeconfig.cache
+C:\Users\lilian.pigassou\OneDrive - Dashperf\Documents\GitHub\WinCamStream\Win\ClientDotnet\WcsWinClient\obj\Release\net8.0-windows\ref\WcsWinClient.dll
