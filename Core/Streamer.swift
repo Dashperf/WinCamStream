@@ -41,6 +41,7 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
     private var listener: NWListener?
     private var connection: NWConnection?
     private var controlListener: NWListener?
+    private var activeControlPort: UInt16?
     private let maxControlLineBytes = 16 * 1024
 
     private struct ControlClient {
@@ -92,6 +93,13 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
     private var didBeginOrientationNotifications = false
     private var orientationPoller: DispatchSourceTimer?
 
+    override init() {
+        super.init()
+        controlQ.async {
+            self.ensureControlAPI(on: self.controlPort(forVideoPort: self.listenPort))
+        }
+    }
+
     // MARK: Config API
     func setConfig(from p: PendingConfig) {
         listenPort   = p.port
@@ -129,7 +137,8 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
             self.setConfig(from: new)
 
             guard self.isRunning else {
-                // pas démarré : rien d’autre à faire
+                // Keep remote control reachable even when idle.
+                self.ensureControlAPI(on: self.controlPort(forVideoPort: self.listenPort))
                 return
             }
 
@@ -207,7 +216,7 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
                 }
 
                 self.setupTCP(on: self.listenPort)
-                self.setupControlAPI(on: self.controlPort(forVideoPort: self.listenPort))
+                self.ensureControlAPI(on: self.controlPort(forVideoPort: self.listenPort))
 
                 self.sessionQ.async {
                     self.setupCapture()
@@ -243,7 +252,6 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
 
             self.connection?.cancel(); self.connection = nil
             self.listener?.cancel(); self.listener = nil
-            self.stopControlAPI()
 
             DispatchQueue.main.async {
                 UIApplication.shared.isIdleTimerDisabled = false
@@ -321,6 +329,13 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
     }
 
     // MARK: Control API (JSON lines)
+    private func ensureControlAPI(on port: UInt16) {
+        if controlListener != nil, activeControlPort == port {
+            return
+        }
+        setupControlAPI(on: port)
+    }
+
     private func setupControlAPI(on port: UInt16) {
         do {
             guard let p = NWEndpoint.Port(rawValue: port) else {
@@ -338,7 +353,9 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
             }
             lst.start(queue: controlQ)
             controlListener = lst
+            activeControlPort = port
         } catch {
+            activeControlPort = nil
             DispatchQueue.main.async { self.status = "Control TCP error: \(error.localizedDescription)" }
         }
     }
@@ -350,6 +367,7 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
         controlClients.removeAll()
         controlListener?.cancel()
         controlListener = nil
+        activeControlPort = nil
     }
 
     private func attachControlClient(_ conn: NWConnection) {

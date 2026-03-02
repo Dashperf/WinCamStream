@@ -14,6 +14,8 @@ Project: `Win/ClientDotnet/WcsWinClient`
 - USB forwarding control from UI:
   - `Start iProxy` (video + control tunnels)
   - `Stop iProxy`
+- Control API handshake support:
+  - ignores initial `hello` frame and waits for the real command response
 - Automatic bitrate calibration:
   - probes bitrate from `start` to `max`
   - detects saturation using `stats.dropped` and `stats.tx_ms`

@@ -322,7 +322,7 @@ public partial class Form1 : Form
         var info = new ProcessStartInfo
         {
             FileName = iproxyExe,
-            Arguments = $"{localPort} {devicePort}",
+            Arguments = $"-l {localPort}:{devicePort}",
             WorkingDirectory = Path.GetDirectoryName(iproxyExe) ?? AppContext.BaseDirectory,
             UseShellExecute = false,
             CreateNoWindow = true,
@@ -889,6 +889,7 @@ internal sealed class WcsControlClient
         timeoutCts.CancelAfter(timeoutMs);
 
         using var tcp = new TcpClient();
+        tcp.NoDelay = true;
         await tcp.ConnectAsync(host, port, timeoutCts.Token);
 
         await using var stream = tcp.GetStream();
@@ -898,13 +899,39 @@ internal sealed class WcsControlClient
         await stream.WriteAsync(request.AsMemory(0, request.Length), timeoutCts.Token);
         await stream.FlushAsync(timeoutCts.Token);
 
-        var line = await ReadLineAsync(stream, timeoutCts.Token);
-        if (string.IsNullOrWhiteSpace(line))
+        JsonDocument? hello = null;
+        for (int i = 0; i < 4; i++)
         {
-            throw new InvalidOperationException("Empty response from control API.");
+            var line = await ReadLineAsync(stream, timeoutCts.Token);
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                continue;
+            }
+
+            JsonDocument doc;
+            try
+            {
+                doc = JsonDocument.Parse(line);
+            }
+            catch (Exception ex)
+            {
+                hello?.Dispose();
+                throw new InvalidOperationException($"Invalid JSON from control API: {ex.Message}");
+            }
+
+            if (IsHelloPayload(doc.RootElement))
+            {
+                hello?.Dispose();
+                hello = doc;
+                continue;
+            }
+
+            hello?.Dispose();
+            return doc;
         }
 
-        return JsonDocument.Parse(line);
+        hello?.Dispose();
+        throw new InvalidOperationException("No command response from control API.");
     }
 
     private static async Task<string> ReadLineAsync(NetworkStream stream, CancellationToken ct)
@@ -937,5 +964,15 @@ internal sealed class WcsControlClient
         }
 
         return Encoding.UTF8.GetString(bytes.ToArray());
+    }
+
+    private static bool IsHelloPayload(JsonElement root)
+    {
+        if (!root.TryGetProperty("type", out var t) || t.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        return string.Equals(t.GetString(), "hello", StringComparison.OrdinalIgnoreCase);
     }
 }
