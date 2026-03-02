@@ -8,6 +8,12 @@ Project: `Win/ClientDotnet/WcsWinClient`
   - `start`, `stop`, `restart`
   - `request_keyframe`
   - `apply` (full config)
+- Embedded Windows tooling in output `bin`:
+  - `iproxy.exe` + required `libimobiledevice` DLLs
+  - `ffplay.exe` + FFmpeg shared DLLs
+- USB forwarding control from UI:
+  - `Start iProxy` (video + control tunnels)
+  - `Stop iProxy`
 - Automatic bitrate calibration:
   - probes bitrate from `start` to `max`
   - detects saturation using `stats.dropped` and `stats.tx_ms`
@@ -26,21 +32,19 @@ From source:
 ```
 
 Direct executable:
-- `Win\ClientDotnet\WcsWinClient\bin\Release\net8.0-windows\WcsWinClient.exe`
+- `Win\ClientDotnet\WcsWinClient\bin\Release\net10.0-windows\WcsWinClient.exe`
 
 ## Typical flow
-1. USB forwarding:
-```bash
-iproxy 5000 5000
-iproxy 5001 5001
-```
-2. In app:
+1. In app:
 - host: `127.0.0.1`
 - video port: `5000`
 - control port: `5001`
+2. Click `Start iProxy`.
 3. Click `Start`.
 4. Click `Calibrate`.
 5. Click `Preview ffplay`.
+
+No external install of `iproxy`/`ffplay` is required when using the built `bin` output.
 
 ## Calibration knobs
 - `Cal start(M)`: first tested bitrate.

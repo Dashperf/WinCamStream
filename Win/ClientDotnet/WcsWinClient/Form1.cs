@@ -46,11 +46,15 @@ public partial class Form1 : Form
     private Button _keyframeButton = null!;
     private Button _applyButton = null!;
     private Button _calibrateButton = null!;
+    private Button _iproxyStartButton = null!;
+    private Button _iproxyStopButton = null!;
     private Button _previewButton = null!;
 
     private readonly System.Windows.Forms.Timer _statusTimer;
     private bool _statusRefreshInFlight;
     private CancellationTokenSource? _calibrationCts;
+    private Process? _videoIproxyProcess;
+    private Process? _controlIproxyProcess;
 
     public Form1()
     {
@@ -72,10 +76,11 @@ public partial class Form1 : Form
             _statusTimer.Stop();
             _calibrationCts?.Cancel();
             _calibrationCts?.Dispose();
+            StopIproxyTunnels(logWhenAlreadyStopped: false);
         };
 
         Log("Client ready.");
-        Log("Tip: forward USB first, e.g. iproxy 5000 5000 and iproxy 5001 5001.");
+        Log("Tip: use 'Start iProxy' to open USB forwarding from this app.");
     }
 
     private void BuildUi()
@@ -162,14 +167,16 @@ public partial class Form1 : Form
 
         y += 40;
 
-        _statusButton = AddButton(controlsPanel, "Status", 12, y, 88);
-        _startButton = AddButton(controlsPanel, "Start", 106, y, 88);
-        _stopButton = AddButton(controlsPanel, "Stop", 200, y, 88);
-        _restartButton = AddButton(controlsPanel, "Restart", 294, y, 88);
-        _keyframeButton = AddButton(controlsPanel, "Keyframe", 388, y, 88);
-        _applyButton = AddButton(controlsPanel, "Apply", 482, y, 88);
-        _calibrateButton = AddButton(controlsPanel, "Calibrate", 576, y, 110);
-        _previewButton = AddButton(controlsPanel, "Preview ffplay", 692, y, 120);
+        _iproxyStartButton = AddButton(controlsPanel, "Start iProxy", 12, y, 104);
+        _iproxyStopButton = AddButton(controlsPanel, "Stop iProxy", 122, y, 104);
+        _statusButton = AddButton(controlsPanel, "Status", 232, y, 80);
+        _startButton = AddButton(controlsPanel, "Start", 318, y, 80);
+        _stopButton = AddButton(controlsPanel, "Stop", 404, y, 80);
+        _restartButton = AddButton(controlsPanel, "Restart", 490, y, 80);
+        _keyframeButton = AddButton(controlsPanel, "Keyframe", 576, y, 80);
+        _applyButton = AddButton(controlsPanel, "Apply", 662, y, 80);
+        _calibrateButton = AddButton(controlsPanel, "Calibrate", 748, y, 96);
+        _previewButton = AddButton(controlsPanel, "Preview ffplay", 850, y, 120);
 
         y += 38;
 
@@ -184,10 +191,14 @@ public partial class Form1 : Form
         _metricsBox.ReadOnly = true;
 
         BindEvents();
+        UpdateIproxyButtonsState();
     }
 
     private void BindEvents()
     {
+        _iproxyStartButton.Click += (_, _) => StartIproxyTunnels();
+        _iproxyStopButton.Click += (_, _) => StopIproxyTunnels(logWhenAlreadyStopped: true);
+
         _statusButton.Click += async (_, _) => await RefreshStatusAsync(logRawJson: true);
 
         _startButton.Click += async (_, _) =>
@@ -263,6 +274,119 @@ public partial class Form1 : Form
         catch (Exception ex)
         {
             Log($"{cmd} error: {ex.Message}");
+        }
+    }
+
+    private void StartIproxyTunnels()
+    {
+        try
+        {
+            StopIproxyTunnels(logWhenAlreadyStopped: false);
+
+            int videoPort = GetVideoPort();
+            int controlPort = GetControlPort();
+            _videoPortBox.Text = videoPort.ToString(CultureInfo.InvariantCulture);
+            _controlPortBox.Text = controlPort.ToString(CultureInfo.InvariantCulture);
+
+            var iproxyExe = ResolveIproxyPath();
+            _videoIproxyProcess = StartIproxyProcess(iproxyExe, videoPort, videoPort, "video");
+            _controlIproxyProcess = StartIproxyProcess(iproxyExe, controlPort, controlPort, "control");
+
+            UpdateIproxyButtonsState();
+            Log($"iProxy running from {iproxyExe}.");
+        }
+        catch (Exception ex)
+        {
+            StopIproxyTunnels(logWhenAlreadyStopped: false);
+            Log("iProxy start error: " + ex.Message);
+        }
+    }
+
+    private void StopIproxyTunnels(bool logWhenAlreadyStopped)
+    {
+        bool hadRunningTunnel = IsProcessRunning(_videoIproxyProcess) || IsProcessRunning(_controlIproxyProcess);
+
+        StopIproxyProcess(ref _videoIproxyProcess, "video");
+        StopIproxyProcess(ref _controlIproxyProcess, "control");
+
+        UpdateIproxyButtonsState();
+
+        if (!hadRunningTunnel && logWhenAlreadyStopped)
+        {
+            Log("iProxy not running.");
+        }
+    }
+
+    private static Process StartIproxyProcess(string iproxyExe, int localPort, int devicePort, string label)
+    {
+        var info = new ProcessStartInfo
+        {
+            FileName = iproxyExe,
+            Arguments = $"{localPort} {devicePort}",
+            WorkingDirectory = Path.GetDirectoryName(iproxyExe) ?? AppContext.BaseDirectory,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+
+        var process = Process.Start(info) ?? throw new InvalidOperationException($"Failed to start iProxy for {label} tunnel.");
+        if (process.WaitForExit(300))
+        {
+            process.Dispose();
+            throw new InvalidOperationException($"iProxy exited immediately for {label} tunnel (port {localPort}).");
+        }
+
+        return process;
+    }
+
+    private void StopIproxyProcess(ref Process? process, string label)
+    {
+        if (process is null)
+        {
+            return;
+        }
+
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                process.WaitForExit(1500);
+            }
+
+            Log($"iProxy {label} tunnel stopped.");
+        }
+        catch (Exception ex)
+        {
+            Log($"iProxy {label} stop warning: {ex.Message}");
+        }
+        finally
+        {
+            process.Dispose();
+            process = null;
+        }
+    }
+
+    private void UpdateIproxyButtonsState()
+    {
+        bool running = IsProcessRunning(_videoIproxyProcess) || IsProcessRunning(_controlIproxyProcess);
+        _iproxyStartButton.Enabled = !running;
+        _iproxyStopButton.Enabled = running;
+    }
+
+    private static bool IsProcessRunning(Process? process)
+    {
+        if (process is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            return !process.HasExited;
+        }
+        catch
+        {
+            return false;
         }
     }
 
@@ -584,25 +708,33 @@ public partial class Form1 : Form
         _previewButton.Enabled = enabled;
     }
 
-    private static string ResolveFfplayPath()
+    private static string ResolveFfplayPath() =>
+        ResolveBinaryPath("ffplay.exe", Path.Combine("Win", "ffmpeg-master-latest-win64-gpl-shared", "bin"));
+
+    private static string ResolveIproxyPath() =>
+        ResolveBinaryPath("iproxy.exe", Path.Combine("Win", "Iproxy"));
+
+    private static string ResolveBinaryPath(string exeName, string repoRelativeFolder)
     {
-        if (TryFindExeInPath("ffplay.exe", out var pathFromPath))
+        var bundled = Path.Combine(AppContext.BaseDirectory, exeName);
+        if (File.Exists(bundled))
         {
-            return pathFromPath;
+            return bundled;
         }
 
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         for (int i = 0; i < 12 && dir is not null; i++)
         {
-            var candidate = Path.Combine(dir.FullName, "Win", "ffmpeg-master-latest-win64-gpl-shared", "bin", "ffplay.exe");
+            var candidate = Path.Combine(dir.FullName, repoRelativeFolder, exeName);
             if (File.Exists(candidate))
             {
                 return candidate;
             }
+
             dir = dir.Parent;
         }
 
-        return "ffplay";
+        return TryFindExeInPath(exeName, out var pathFromPath) ? pathFromPath : exeName;
     }
 
     private static bool TryFindExeInPath(string exeName, out string fullPath)
