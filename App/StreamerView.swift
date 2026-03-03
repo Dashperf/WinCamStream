@@ -201,6 +201,7 @@ struct StreamerView: View {
                     Text("Landscape left").tag(AVCaptureVideoOrientation.landscapeLeft)
                 }
                 .pickerStyle(.segmented)
+                .disabled(pending.autoRotate)
 
                 Toggle("Auto-rotate", isOn: $pending.autoRotate)
             }

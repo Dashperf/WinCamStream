@@ -56,6 +56,7 @@ public partial class Form1 : Form
     private bool _updatingUiFromRemote;
     private bool _configDirty;
     private bool _remoteConfigPending;
+    private long _lastConfigRevision;
     private CancellationTokenSource? _calibrationCts;
     private Process? _videoIproxyProcess;
     private Process? _controlIproxyProcess;
@@ -198,6 +199,7 @@ public partial class Form1 : Form
 
         BindConfigDirtyTracking();
         BindEvents();
+        _orientationBox.Enabled = !_autoRotateCheck.Checked;
         UpdateIproxyButtonsState();
         ClearConfigDirty();
     }
@@ -240,6 +242,7 @@ public partial class Form1 : Form
                 var cfg = BuildConfigFromUi();
                 using var doc = await SendControlCommandAsync(new { cmd = "apply", config = cfg }, CancellationToken.None);
                 Log("Apply: " + doc.RootElement.GetRawText());
+                _lastConfigRevision = Math.Max(_lastConfigRevision, GetLong(doc.RootElement, "config_revision", _lastConfigRevision));
                 ClearConfigDirty();
                 await RefreshStatusAsync(logRawJson: false);
             }
@@ -253,6 +256,11 @@ public partial class Form1 : Form
         {
             ClearConfigDirty();
             await RefreshStatusAsync(logRawJson: true);
+        };
+
+        _autoRotateCheck.CheckedChanged += (_, _) =>
+        {
+            _orientationBox.Enabled = !_autoRotateCheck.Checked;
         };
 
         _calibrateButton.Click += async (_, _) => await RunCalibrationAsync();
@@ -272,18 +280,8 @@ public partial class Form1 : Form
                 }
 
                 var uri = $"tcp://{GetHost()}:{GetVideoPort()}?tcp_nodelay=1";
-                var forceH264 = string.Equals(_protocolBox.SelectedItem?.ToString(), "annexb", StringComparison.OrdinalIgnoreCase)
-                    ? "-f h264 "
-                    : string.Empty;
-                var args = $"-fflags nobuffer -flags low_delay -framedrop -probesize 2048 -analyzeduration 0 {forceH264}-vsync drop -use_wallclock_as_timestamps 1 -i \"{uri}\"";
                 var ffplay = ResolveFfplayPath();
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = ffplay,
-                    Arguments = args,
-                    UseShellExecute = false,
-                });
-                Log($"Preview started with {ffplay} on {uri}");
+                StartFfplayPreview(ffplay, uri);
             }
             catch (Exception ex)
             {
@@ -477,6 +475,12 @@ public partial class Form1 : Form
 
             _statusBox.Text = GetString(root, "status");
             _metricsBox.Text = GetString(root, "metrics");
+            var revision = GetLong(root, "config_revision", _lastConfigRevision);
+            if (revision < _lastConfigRevision)
+            {
+                return;
+            }
+            _lastConfigRevision = revision;
 
             if (root.TryGetProperty("config", out var cfg))
             {
@@ -807,6 +811,61 @@ public partial class Form1 : Form
         _previewButton.Enabled = enabled;
     }
 
+    private void StartFfplayPreview(string ffplay, string uri)
+    {
+        var primaryArgs = $"-fflags nobuffer -flags low_delay -framedrop -probesize 32768 -analyzeduration 0 -i \"{uri}\"";
+        if (TryStartFfplay(ffplay, primaryArgs, out var primaryError))
+        {
+            Log($"Preview started with {ffplay} on {uri}");
+            return;
+        }
+
+        Log("Preview primary args failed: " + primaryError);
+
+        var fallbackArgs = $"-fflags nobuffer -flags low_delay -i \"{uri}\"";
+        if (TryStartFfplay(ffplay, fallbackArgs, out var fallbackError))
+        {
+            Log($"Preview fallback started with {ffplay} on {uri}");
+            return;
+        }
+
+        throw new InvalidOperationException("ffplay launch failed. " + fallbackError);
+    }
+
+    private static bool TryStartFfplay(string ffplay, string args, out string error)
+    {
+        var info = new ProcessStartInfo
+        {
+            FileName = ffplay,
+            Arguments = args,
+            UseShellExecute = false,
+            RedirectStandardError = true,
+            RedirectStandardOutput = true,
+            CreateNoWindow = true,
+        };
+
+        using var process = Process.Start(info);
+        if (process is null)
+        {
+            error = "Process.Start returned null.";
+            return false;
+        }
+
+        if (process.WaitForExit(1400))
+        {
+            var stderr = process.StandardError.ReadToEnd().Trim();
+            var stdout = process.StandardOutput.ReadToEnd().Trim();
+            var details = string.IsNullOrWhiteSpace(stderr) ? stdout : stderr;
+            error = string.IsNullOrWhiteSpace(details)
+                ? $"ffplay exited immediately with code {process.ExitCode}."
+                : $"ffplay exited immediately with code {process.ExitCode}: {details}";
+            return false;
+        }
+
+        error = string.Empty;
+        return true;
+    }
+
     private static string ResolveFfplayPath() =>
         ResolveBinaryPath("ffplay.exe", Path.Combine("Win", "ffmpeg-master-latest-win64-gpl-shared", "bin"));
 
@@ -905,6 +964,26 @@ public partial class Form1 : Form
         }
 
         if (v.ValueKind == JsonValueKind.String && int.TryParse(v.GetString(), out var si))
+        {
+            return si;
+        }
+
+        return fallback;
+    }
+
+    private static long GetLong(JsonElement obj, string name, long fallback)
+    {
+        if (!obj.TryGetProperty(name, out var v))
+        {
+            return fallback;
+        }
+
+        if (v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out var i))
+        {
+            return i;
+        }
+
+        if (v.ValueKind == JsonValueKind.String && long.TryParse(v.GetString(), out var si))
         {
             return si;
         }

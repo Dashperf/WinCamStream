@@ -26,6 +26,8 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
     @Published var isBusy: Bool = false
     @Published var metrics: String = ""
     @Published private(set) var configRevision: UInt64 = 0
+    private let configRevisionLock = NSLock()
+    private var configRevisionValue: UInt64 = 0
 
     // MARK: Queues
     private let controlQ = DispatchQueue(label: "Streamer.control")
@@ -128,7 +130,18 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
     }
 
     private func bumpConfigRevision() {
-        DispatchQueue.main.async { self.configRevision &+= 1 }
+        configRevisionLock.lock()
+        configRevisionValue &+= 1
+        let rev = configRevisionValue
+        configRevisionLock.unlock()
+        DispatchQueue.main.async { self.configRevision = rev }
+    }
+
+    private func currentConfigRevision() -> UInt64 {
+        configRevisionLock.lock()
+        let rev = configRevisionValue
+        configRevisionLock.unlock()
+        return rev
     }
 
     /// Applique `pending` : live si possible, sinon restart propre.
@@ -529,7 +542,12 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
         p.bitrate = min(max(p.bitrate, p.minBitrate), p.maxBitrate)
 
         applyOrRestartLocked(with: p)
-        sendControlResponse(["type": "ok", "cmd": "apply", "config": makeStatusConfigPayload()], to: conn)
+        sendControlResponse([
+            "type": "ok",
+            "cmd": "apply",
+            "config_revision": currentConfigRevision(),
+            "config": makeStatusConfigPayload()
+        ], to: conn)
     }
 
     private func sendControlResponse(_ payload: [String: Any], to conn: NWConnection) {
@@ -543,6 +561,7 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
     }
 
     private func makeStatusPayload() -> [String: Any] {
+        let revision = currentConfigRevision()
         [
             "type": "status",
             "state": stateString(),
@@ -550,6 +569,7 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
             "busy": isBusy,
             "status": status,
             "metrics": metrics,
+            "config_revision": revision,
             "video_port": Int(listenPort),
             "control_port": Int(controlPort(forVideoPort: listenPort)),
             "stats": [
@@ -728,7 +748,13 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
                              value: limits as CFArray)
         VTSessionSetProperty(vt, key: kVTCompressionPropertyKey_ExpectedFrameRate,
                              value: NSNumber(value: Int32(max(1.0, targetFPS))))
-        let gop: Int32 = intraOnly ? 1 : 30
+        let gop: Int32
+        if intraOnly {
+            gop = 1
+        } else {
+            // Keep GOP short enough to recover quickly if a frame is lost in transport.
+            gop = Int32(max(4, min(30, Int(targetFPS / 4.0))))
+        }
         VTSessionSetProperty(vt, key: kVTCompressionPropertyKey_MaxKeyFrameInterval,
                              value: NSNumber(value: gop))
         VTSessionSetProperty(vt, key: kVTCompressionPropertyKey_AllowTemporalCompression,
@@ -774,11 +800,6 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
     fileprivate func handleEncodedSampleBuffer(_ sbuf: CMSampleBuffer) {
         guard let conn = connection,
               let dataBuffer = CMSampleBufferGetDataBuffer(sbuf) else { return }
-
-        if inFlightSends >= maxInFlightSends {
-            droppedWindow += 1
-            return
-        }
 
         // keyframe ?
         var isKey = true
@@ -846,6 +867,9 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
             self.lastTxMs = avgSendMs
 
             self.updateAdaptiveBitrate(sentFrames: fps, droppedFrames: dropped, avgSendMs: avgSendMs)
+            if dropped > 0 {
+                self.forceIDRNext = true
+            }
 
             self.framesWindow = 0
             self.bytesWindow = 0
@@ -1014,15 +1038,14 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
     private func orientationFromGravity(_ gravity: CMAcceleration) -> AVCaptureVideoOrientation? {
         let absX = abs(gravity.x)
         let absY = abs(gravity.y)
-        if absY >= absX {
-            if gravity.y <= -0.75 || gravity.y >= 0.75 {
-                return .portrait
-            }
+        // Ignore diagonal/noisy states to avoid rapid oscillations.
+        if abs(absX - absY) < 0.12 {
             return nil
         }
-        if gravity.x >= 0.65 { return .landscapeRight }
-        if gravity.x <= -0.65 { return .landscapeLeft }
-        return nil
+        if absX > absY {
+            return gravity.x >= 0 ? .landscapeRight : .landscapeLeft
+        }
+        return absY > 0.2 ? .portrait : nil
     }
 
     // MARK: Adaptive bitrate + helpers

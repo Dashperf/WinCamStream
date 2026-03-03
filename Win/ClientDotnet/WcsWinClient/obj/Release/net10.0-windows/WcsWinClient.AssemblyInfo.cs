@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("WcsWinClient")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Release")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+553bfbad12d18d50ece2c465663059f7d4f27f0d")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+0d86eb17411ee34b0dbeae870d7e5ff2a9b04654")]
 [assembly: System.Reflection.AssemblyProductAttribute("WcsWinClient")]
 [assembly: System.Reflection.AssemblyTitleAttribute("WcsWinClient")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
