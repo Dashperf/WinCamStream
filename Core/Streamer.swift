@@ -32,6 +32,7 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
     // MARK: Queues
     private let controlQ = DispatchQueue(label: "Streamer.control")
     private let sessionQ = DispatchQueue(label: "Streamer.session") // capture + encode
+    private let networkQ = DispatchQueue(label: "Streamer.network") // I/O TCP only
 
     // MARK: Capture
     private let session = AVCaptureSession()
@@ -74,7 +75,7 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
     fileprivate var sentCodecHeader = false
     fileprivate var forceIDRNext = false
     private var inFlightSends = 0
-    private let maxInFlightSends = 3
+    private let maxInFlightSends = 8
 
     // Stats
     private var statsTimer: DispatchSourceTimer?
@@ -348,11 +349,15 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
                 self.forceIDRNext = true
                 self.inFlightSends = 0
                 conn.stateUpdateHandler = { [weak self] st in
-                    if case .failed = st { self?.inFlightSends = 0 }
-                    if case .cancelled = st { self?.inFlightSends = 0 }
+                    if case .failed = st {
+                        self?.sessionQ.async { self?.inFlightSends = 0 }
+                    }
+                    if case .cancelled = st {
+                        self?.sessionQ.async { self?.inFlightSends = 0 }
+                    }
                     DispatchQueue.main.async { self?.status = "Video client: \(st)" }
                 }
-                conn.start(queue: self.sessionQ)
+                conn.start(queue: self.networkQ)
             }
             lst.start(queue: controlQ)
             self.listener = lst
@@ -766,7 +771,7 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
                        didOutput sampleBuffer: CMSampleBuffer,
                        from connection: AVCaptureConnection) {
         guard self.connection != nil else { return }
-        if inFlightSends >= maxInFlightSends {
+        if inFlightSends >= (maxInFlightSends * 2) {
             droppedWindow += 1
             return // évite de remplir la file quand le lien plafonne
         }
@@ -798,8 +803,18 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
 
     // MARK: Encoded output → TCP
     fileprivate func handleEncodedSampleBuffer(_ sbuf: CMSampleBuffer) {
+        sessionQ.async { [weak self] in
+            self?.handleEncodedSampleBufferOnSessionQ(sbuf)
+        }
+    }
+
+    private func handleEncodedSampleBufferOnSessionQ(_ sbuf: CMSampleBuffer) {
         guard let conn = connection,
               let dataBuffer = CMSampleBufferGetDataBuffer(sbuf) else { return }
+        if inFlightSends >= maxInFlightSends {
+            droppedWindow += 1
+            return
+        }
 
         // keyframe ?
         var isKey = true
@@ -834,12 +849,17 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
             let sendStartNs = DispatchTime.now().uptimeNanoseconds
             conn.send(content: payload, completion: .contentProcessed { [weak self] err in
                 guard let self = self else { return }
-                let endNs = DispatchTime.now().uptimeNanoseconds
-                let sendMs = Double(endNs - sendStartNs) / 1_000_000.0
-                self.sendLatencyMsWindow += sendMs
-                self.sendEventsWindow += 1
-                if err != nil { self.droppedWindow += 1 }
-                if self.inFlightSends > 0 { self.inFlightSends -= 1 }
+                self.sessionQ.async {
+                    let endNs = DispatchTime.now().uptimeNanoseconds
+                    let sendMs = Double(endNs - sendStartNs) / 1_000_000.0
+                    self.sendLatencyMsWindow += sendMs
+                    self.sendEventsWindow += 1
+                    if err != nil {
+                        self.droppedWindow += 1
+                        self.forceIDRNext = true
+                    }
+                    if self.inFlightSends > 0 { self.inFlightSends -= 1 }
+                }
             })
         } else {
             droppedWindow += 1
