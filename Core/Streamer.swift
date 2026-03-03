@@ -77,7 +77,7 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
     fileprivate var sentCodecHeader = false
     fileprivate var forceIDRNext = false
     private var inFlightSends = 0
-    private let maxInFlightSends = 8
+    private let maxInFlightSends = 16
 
     // Stats
     private var statsTimer: DispatchSourceTimer?
@@ -90,6 +90,8 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
     private var lastDropped: Int = 0
     private var lastMbps: Double = 0
     private var lastTxMs: Double = 0
+    private var abrBadWindows: Int = 0
+    private var abrGoodWindows: Int = 0
 
     // State
     private enum State { case idle, starting, running, stopping }
@@ -237,6 +239,8 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
                 self.droppedWindow = 0
                 self.sendLatencyMsWindow = 0
                 self.sendEventsWindow = 0
+                self.abrBadWindows = 0
+                self.abrGoodWindows = 0
 
                 DispatchQueue.main.async {
                     UIApplication.shared.isIdleTimerDisabled = true
@@ -282,6 +286,8 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
             self.inFlightSends = 0
             self.activeVideoConnectionId = nil
             self.videoClientReady = false
+            self.abrBadWindows = 0
+            self.abrGoodWindows = 0
 
             DispatchQueue.main.async {
                 UIApplication.shared.isIdleTimerDisabled = false
@@ -775,7 +781,8 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
         let boundedBitrate = clampBitrate(bitrate)
         VTSessionSetProperty(vt, key: kVTCompressionPropertyKey_AverageBitRate,
                              value: NSNumber(value: boundedBitrate))
-        let limits: [NSNumber] = [NSNumber(value: boundedBitrate/8), NSNumber(value: 1)]
+        // 2s window: same average bitrate, but less aggressive short-term throttling.
+        let limits: [NSNumber] = [NSNumber(value: max(1, (boundedBitrate / 8) * 2)), NSNumber(value: 2)]
         VTSessionSetProperty(vt, key: kVTCompressionPropertyKey_DataRateLimits,
                              value: limits as CFArray)
         VTSessionSetProperty(vt, key: kVTCompressionPropertyKey_ExpectedFrameRate,
@@ -798,7 +805,7 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
                        didOutput sampleBuffer: CMSampleBuffer,
                        from connection: AVCaptureConnection) {
         guard self.connection != nil else { return }
-        if inFlightSends >= (maxInFlightSends * 2) {
+        if inFlightSends >= (maxInFlightSends * 4) {
             droppedWindow += 1
             return // évite de remplir la file quand le lien plafonne
         }
@@ -904,7 +911,8 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
             let dropped = self.droppedWindow
             let mbps = Double(self.bytesWindow) * 8.0 / 1_000_000.0
             let avgSendMs = self.sendEventsWindow > 0 ? (self.sendLatencyMsWindow / Double(self.sendEventsWindow)) : 0
-            let metric = String(format: "~%2d fps | ~%.1f Mb/s | drop:%d | tx:%.1f ms", fps, mbps, dropped, avgSendMs)
+            let inFlight = self.inFlightSends
+            let metric = String(format: "~%2d fps | ~%.1f Mb/s | drop:%d | tx:%.1f ms | q:%d", fps, mbps, dropped, avgSendMs, inFlight)
                 + (self.autoBitrate ? " | abr:\(self.bitrate/1_000_000)M" : "")
             DispatchQueue.main.async { self.metrics = metric }
 
@@ -938,6 +946,8 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
         lastDropped = 0
         lastMbps = 0
         lastTxMs = 0
+        abrBadWindows = 0
+        abrGoodWindows = 0
     }
 
     private func applyCaptureOrientation(_ newOrientation: AVCaptureVideoOrientation) {
@@ -1107,10 +1117,26 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
         let dropRatio = Double(droppedFrames) / Double(total)
 
         var next = bitrate
-        if dropRatio > 0.12 || avgSendMs > (frameBudgetMs * 0.85) {
-            next = Int(Double(bitrate) * 0.85)
-        } else if dropRatio < 0.02 && avgSendMs > 0 && avgSendMs < (frameBudgetMs * 0.35) {
-            next = Int(Double(bitrate) * 1.06)
+        let badWindow = dropRatio > 0.10 || avgSendMs > (frameBudgetMs * 0.90)
+        let goodWindow = dropRatio < 0.02 && avgSendMs > 0 && avgSendMs < (frameBudgetMs * 0.35)
+
+        if badWindow {
+            abrBadWindows += 1
+            abrGoodWindows = 0
+        } else if goodWindow {
+            abrGoodWindows += 1
+            abrBadWindows = 0
+        } else {
+            abrBadWindows = 0
+            abrGoodWindows = 0
+        }
+
+        if abrBadWindows >= 2 {
+            next = Int(Double(bitrate) * 0.92)
+            abrBadWindows = 0
+        } else if abrGoodWindows >= 3 {
+            next = Int(Double(bitrate) * 1.04)
+            abrGoodWindows = 0
         }
 
         next = clampBitrate(next)
