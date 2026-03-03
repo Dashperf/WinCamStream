@@ -562,7 +562,7 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
 
     private func makeStatusPayload() -> [String: Any] {
         let revision = currentConfigRevision()
-        [
+        return [
             "type": "status",
             "state": stateString(),
             "running": isRunning,
