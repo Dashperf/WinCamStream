@@ -1,28 +1,28 @@
 import Foundation
 import AVFoundation
 
-enum Resolution: CaseIterable {
+enum Resolution: CaseIterable, Equatable {
     case r720p, r1080p, r4k
     var width: Int  { switch self { case .r720p: 1280; case .r1080p: 1920; case .r4k: 3840 } }
     var height: Int { switch self { case .r720p:  720; case .r1080p: 1080; case .r4k: 2160 } }
     var label: String { switch self { case .r720p: "720p"; case .r1080p: "1080p"; case .r4k: "4K" } }
 }
 
-enum OutputProtocol { case annexb, avcc }
+enum OutputProtocol: Equatable { case annexb, avcc }
 
-enum H264Profile: CaseIterable {
+enum H264Profile: CaseIterable, Equatable {
     case baseline, main, high
     var label: String {
         switch self { case .baseline: return "Baseline"; case .main: return "Main"; case .high: return "High" }
     }
 }
 
-enum H264Entropy: CaseIterable {
+enum H264Entropy: CaseIterable, Equatable {
     case cavlc, cabac
     var label: String { self == .cavlc ? "CAVLC" : "CABAC" }
 }
 
-struct PendingConfig {
+struct PendingConfig: Equatable {
     var port: UInt16 = 5000
     var resolution: Resolution = .r1080p
     var fps: Double = 120

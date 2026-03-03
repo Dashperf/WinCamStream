@@ -4,6 +4,9 @@ import AVFoundation
 struct StreamerView: View {
     @ObservedObject var streamer: Streamer
     @Binding var pending: PendingConfig
+    @State private var localDirty = false
+    @State private var remoteChangedWhileDirty = false
+    @State private var lastRemoteConfig = PendingConfig()
 
     private func maxFPSForPending() -> Int {
         Int(streamer.maxSupportedFPS(width: pending.resolution.width,
@@ -24,6 +27,25 @@ struct StreamerView: View {
         if pending.bitrate > pending.maxBitrate {
             pending.bitrate = pending.maxBitrate
         }
+    }
+
+    private func syncPendingFromStreamer(force: Bool) {
+        let remote = PendingConfig(from: streamer)
+        if !force && localDirty {
+            if remote != lastRemoteConfig {
+                lastRemoteConfig = remote
+                remoteChangedWhileDirty = true
+            }
+            return
+        }
+        lastRemoteConfig = remote
+        pending = remote
+        localDirty = false
+        remoteChangedWhileDirty = false
+    }
+
+    private func markLocalDirty() {
+        localDirty = pending != lastRemoteConfig
     }
 
     var body: some View {
@@ -67,13 +89,32 @@ struct StreamerView: View {
 
                     normalizeAutoBitrateBounds()
                     streamer.applyOrRestart(with: pending)
+                    lastRemoteConfig = pending
+                    localDirty = false
+                    remoteChangedWhileDirty = false
                 }
                 .buttonStyle(.bordered)
                 .disabled(streamer.isBusy)
 
+                Button("Sync remote") {
+                    syncPendingFromStreamer(force: true)
+                }
+                .buttonStyle(.bordered)
+                .disabled(streamer.isBusy || (!localDirty && !remoteChangedWhileDirty))
+
                 Button("Force keyframe") { streamer.requestKeyframe() }
                     .buttonStyle(.bordered)
                     .disabled(!streamer.isRunning || streamer.isBusy)
+            }
+
+            if remoteChangedWhileDirty {
+                Text("Remote settings changed. Tap Apply changes to keep local edits or Sync remote to load device values.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            } else if localDirty {
+                Text("Local edits pending. Tap Apply changes.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Divider()
@@ -204,6 +245,13 @@ struct StreamerView: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
                 .minimumScaleFactor(0.9)
+        }
+        .onAppear { syncPendingFromStreamer(force: true) }
+        .onChange(of: streamer.configRevision) { _ in
+            syncPendingFromStreamer(force: false)
+        }
+        .onChange(of: pending) { _ in
+            markLocalDirty()
         }
     }
 }

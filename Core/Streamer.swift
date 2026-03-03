@@ -5,6 +5,7 @@ import VideoToolbox
 import Network
 import CoreMedia
 import UIKit
+import CoreMotion
 
 // MARK: - VTCompression output callback (C-style)
 private func vtOutputCallback(_ outputCallbackRefCon: UnsafeMutableRawPointer?,
@@ -24,6 +25,7 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
     @Published var isRunning: Bool = false
     @Published var isBusy: Bool = false
     @Published var metrics: String = ""
+    @Published private(set) var configRevision: UInt64 = 0
 
     // MARK: Queues
     private let controlQ = DispatchQueue(label: "Streamer.control")
@@ -69,8 +71,8 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
     // MARK: Anti-dérive / sécurité
     fileprivate var sentCodecHeader = false
     fileprivate var forceIDRNext = false
-    private var sendingFrame = false
-    private var sessionGen: UInt64 = 0
+    private var inFlightSends = 0
+    private let maxInFlightSends = 3
 
     // Stats
     private var statsTimer: DispatchSourceTimer?
@@ -92,6 +94,8 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
     private var orientationObserver: NSObjectProtocol?
     private var didBeginOrientationNotifications = false
     private var orientationPoller: DispatchSourceTimer?
+    private let motionManager = CMMotionManager()
+    private var motionOrientation: AVCaptureVideoOrientation?
 
     override init() {
         super.init()
@@ -120,33 +124,40 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
         normalizeBitrateBounds()
         if profile == .baseline { entropy = .cavlc }
         bitrate = clampBitrate(bitrate)
+        bumpConfigRevision()
+    }
+
+    private func bumpConfigRevision() {
+        DispatchQueue.main.async { self.configRevision &+= 1 }
     }
 
     /// Applique `pending` : live si possible, sinon restart propre.
     func applyOrRestart(with new: PendingConfig) {
-        controlQ.async {
-            // Détecte si un rebuild est requis (change le "bitstream shape")
-            let needsRestart =
-                new.resolution.width  != self.targetWidth  ||
-                new.resolution.height != self.targetHeight ||
-                new.profile           != self.profile      ||
-                new.entropy           != self.entropy      ||
-                new.outputProtocol    != self.outputProtocol ||
-                new.port              != self.listenPort
+        controlQ.async { self.applyOrRestartLocked(with: new) }
+    }
 
-            self.setConfig(from: new)
+    private func applyOrRestartLocked(with new: PendingConfig) {
+        // Détecte si un rebuild est requis (change le "bitstream shape")
+        let needsRestart =
+            new.resolution.width  != self.targetWidth  ||
+            new.resolution.height != self.targetHeight ||
+            new.profile           != self.profile      ||
+            new.entropy           != self.entropy      ||
+            new.outputProtocol    != self.outputProtocol ||
+            new.port              != self.listenPort
 
-            guard self.isRunning else {
-                // Keep remote control reachable even when idle.
-                self.ensureControlAPI(on: self.controlPort(forVideoPort: self.listenPort))
-                return
-            }
+        setConfig(from: new)
 
-            if needsRestart {
-                self.restart()
-            } else {
-                self.applyLiveTweaks()
-            }
+        guard isRunning else {
+            // Keep remote control reachable even when idle.
+            ensureControlAPI(on: controlPort(forVideoPort: listenPort))
+            return
+        }
+
+        if needsRestart {
+            restart()
+        } else {
+            applyLiveTweaks()
         }
     }
 
@@ -165,11 +176,10 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
                     dev.unlockForConfiguration()
                 } catch { /* ignore */ }
             }
-            if let conn = self.videoOutput.connection(with: .video) {
-                conn.videoOrientation = self.orientation
-            }
+            self.applyCaptureOrientation(self.orientation)
             if self.autoRotate {
                 self.installOrientationObserverIfNeeded()
+                DispatchQueue.main.async { [weak self] in self?.applyDeviceOrientation() }
             } else {
                 self.removeOrientationObserver()
             }
@@ -201,10 +211,9 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
                 guard self.state == .idle else { return }
                 self.state = .starting
 
-                self.sessionGen &+= 1
                 self.sentCodecHeader = false
                 self.forceIDRNext = true
-                self.sendingFrame = false
+                self.inFlightSends = 0
                 self.bytesWindow = 0
                 self.framesWindow = 0
                 self.droppedWindow = 0
@@ -252,6 +261,7 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
 
             self.connection?.cancel(); self.connection = nil
             self.listener?.cancel(); self.listener = nil
+            self.inFlightSends = 0
 
             DispatchQueue.main.async {
                 UIApplication.shared.isIdleTimerDisabled = false
@@ -298,14 +308,21 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
     }
 
     // MARK: TCP
+    private func makeTcpParameters() -> NWParameters {
+        let tcp = NWProtocolTCP.Options()
+        tcp.noDelay = true
+        let params = NWParameters(tls: nil, tcp: tcp)
+        params.allowLocalEndpointReuse = true
+        return params
+    }
+
     private func setupTCP(on port: UInt16) {
         do {
             guard let p = NWEndpoint.Port(rawValue: port) else {
                 DispatchQueue.main.async { self.status = "Invalid video port \(port)" }
                 return
             }
-            let params = NWParameters.tcp
-            params.allowLocalEndpointReuse = true
+            let params = makeTcpParameters()
             let lst = try NWListener(using: params, on: p)
             lst.stateUpdateHandler = { [weak self] st in
                 DispatchQueue.main.async { self?.status = "Video listener(\(port)): \(st)" }
@@ -316,8 +333,11 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
                 self.connection = conn
                 self.sentCodecHeader = false
                 self.forceIDRNext = true
-                conn.stateUpdateHandler = { st in
-                    DispatchQueue.main.async { self.status = "Video client: \(st)" }
+                self.inFlightSends = 0
+                conn.stateUpdateHandler = { [weak self] st in
+                    if case .failed = st { self?.inFlightSends = 0 }
+                    if case .cancelled = st { self?.inFlightSends = 0 }
+                    DispatchQueue.main.async { self?.status = "Video client: \(st)" }
                 }
                 conn.start(queue: self.sessionQ)
             }
@@ -345,8 +365,7 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
 
             stopControlAPI()
 
-            let params = NWParameters.tcp
-            params.allowLocalEndpointReuse = true
+            let params = makeTcpParameters()
             let lst = try NWListener(using: params, on: p)
             lst.newConnectionHandler = { [weak self] conn in
                 self?.attachControlClient(conn)
@@ -509,7 +528,7 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
         if p.profile == .baseline { p.entropy = .cavlc }
         p.bitrate = min(max(p.bitrate, p.minBitrate), p.maxBitrate)
 
-        applyOrRestart(with: p)
+        applyOrRestartLocked(with: p)
         sendControlResponse(["type": "ok", "cmd": "apply", "config": makeStatusConfigPayload()], to: conn)
     }
 
@@ -611,7 +630,7 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
         }
         session.addOutput(videoOutput)
 
-        if let c = videoOutput.connection(with: .video) { c.videoOrientation = orientation }
+        applyCaptureOrientation(orientation)
 
         session.commitConfiguration()
         session.startRunning()
@@ -716,11 +735,12 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
                              value: intraOnly ? kCFBooleanFalse : kCFBooleanTrue)
     }
 
-    // MARK: Capture → Encode (back-pressure : on skippe si envoi en cours)
+    // MARK: Capture → Encode (back-pressure : limite les envois en vol)
     func captureOutput(_ output: AVCaptureOutput,
                        didOutput sampleBuffer: CMSampleBuffer,
                        from connection: AVCaptureConnection) {
-        if sendingFrame {
+        guard self.connection != nil else { return }
+        if inFlightSends >= maxInFlightSends {
             droppedWindow += 1
             return // évite de remplir la file quand le lien plafonne
         }
@@ -755,12 +775,10 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
         guard let conn = connection,
               let dataBuffer = CMSampleBufferGetDataBuffer(sbuf) else { return }
 
-        if sendingFrame {
+        if inFlightSends >= maxInFlightSends {
             droppedWindow += 1
             return
         }
-        sendingFrame = true
-        let currentGen = sessionGen
 
         // keyframe ?
         var isKey = true
@@ -791,6 +809,7 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
         if !payload.isEmpty {
             bytesWindow += payload.count
             framesWindow += 1
+            inFlightSends += 1
             let sendStartNs = DispatchTime.now().uptimeNanoseconds
             conn.send(content: payload, completion: .contentProcessed { [weak self] err in
                 guard let self = self else { return }
@@ -799,10 +818,9 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
                 self.sendLatencyMsWindow += sendMs
                 self.sendEventsWindow += 1
                 if err != nil { self.droppedWindow += 1 }
-                if self.sessionGen == currentGen { self.sendingFrame = false }
+                if self.inFlightSends > 0 { self.inFlightSends -= 1 }
             })
         } else {
-            sendingFrame = false
             droppedWindow += 1
         }
     }
@@ -851,7 +869,31 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
         lastTxMs = 0
     }
 
-    // MARK: Auto-rotate (notif + poller, marche même avec verrou d’orientation)
+    private func applyCaptureOrientation(_ newOrientation: AVCaptureVideoOrientation) {
+        guard let conn = videoOutput.connection(with: .video) else { return }
+        if #available(iOS 17.0, *) {
+            let angle = rotationAngle(for: newOrientation)
+            if conn.isVideoRotationAngleSupported(angle) {
+                conn.videoRotationAngle = angle
+                return
+            }
+        }
+        if conn.isVideoOrientationSupported {
+            conn.videoOrientation = newOrientation
+        }
+    }
+
+    private func rotationAngle(for orientation: AVCaptureVideoOrientation) -> CGFloat {
+        switch orientation {
+        case .portrait: return 0
+        case .landscapeRight: return 90
+        case .landscapeLeft: return 270
+        case .portraitUpsideDown: return 180
+        @unknown default: return 0
+        }
+    }
+
+    // MARK: Auto-rotate (notif + poller + CoreMotion fallback)
     private func installOrientationObserverIfNeeded() {
         removeOrientationObserver()
         guard autoRotate else { return }
@@ -866,6 +908,7 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
             ) { [weak self] _ in
                 self?.applyDeviceOrientation()
             }
+            self.startMotionUpdatesIfNeeded()
             self.startOrientationPoller() // fallback si la notif n'arrive pas
             self.applyDeviceOrientation()
         }
@@ -884,6 +927,25 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
         orientationPoller?.cancel(); orientationPoller = nil
     }
 
+    private func startMotionUpdatesIfNeeded() {
+        guard motionManager.isDeviceMotionAvailable, !motionManager.isDeviceMotionActive else { return }
+        motionManager.deviceMotionUpdateInterval = 0.2
+        motionManager.startDeviceMotionUpdates(to: .main) { [weak self] motion, _ in
+            guard let self = self, let gravity = motion?.gravity else { return }
+            if let gOrientation = self.orientationFromGravity(gravity), self.motionOrientation != gOrientation {
+                self.motionOrientation = gOrientation
+                self.applyDeviceOrientation()
+            }
+        }
+    }
+
+    private func stopMotionUpdates() {
+        if motionManager.isDeviceMotionActive {
+            motionManager.stopDeviceMotionUpdates()
+        }
+        motionOrientation = nil
+    }
+
     private func removeOrientationObserver() {
         DispatchQueue.main.async {
             if let obs = self.orientationObserver {
@@ -891,6 +953,7 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
                 self.orientationObserver = nil
             }
             self.stopOrientationPoller()
+            self.stopMotionUpdates()
             if self.didBeginOrientationNotifications {
                 UIDevice.current.endGeneratingDeviceOrientationNotifications()
                 self.didBeginOrientationNotifications = false
@@ -899,17 +962,67 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
     }
 
     private func applyDeviceOrientation() {
-        guard autoRotate, let conn = videoOutput.connection(with: .video) else { return }
-        let devOri = UIDevice.current.orientation
-        let newOri: AVCaptureVideoOrientation
-        switch devOri {
-        case .landscapeLeft:      newOri = .landscapeRight
-        case .landscapeRight:     newOri = .landscapeLeft
-        case .portraitUpsideDown: newOri = .portrait
-        case .portrait:           newOri = .portrait
-        default:                  newOri = conn.videoOrientation // ne change rien si « unknown »
+        guard autoRotate, let newOri = resolveAutoOrientation() else { return }
+        if orientation != newOri {
+            orientation = newOri
+            bumpConfigRevision()
         }
-        if conn.videoOrientation != newOri { conn.videoOrientation = newOri }
+        sessionQ.async { [weak self] in
+            self?.applyCaptureOrientation(newOri)
+        }
+    }
+
+    private func resolveAutoOrientation() -> AVCaptureVideoOrientation? {
+        if let ori = orientationFromDeviceOrientation(UIDevice.current.orientation) {
+            return ori
+        }
+        if let scene = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .first,
+           let ori = orientationFromInterfaceOrientation(scene.interfaceOrientation) {
+            return ori
+        }
+        return motionOrientation
+    }
+
+    private func orientationFromDeviceOrientation(_ value: UIDeviceOrientation) -> AVCaptureVideoOrientation? {
+        switch value {
+        case .portrait, .portraitUpsideDown:
+            return .portrait
+        case .landscapeLeft:
+            return .landscapeRight
+        case .landscapeRight:
+            return .landscapeLeft
+        default:
+            return nil
+        }
+    }
+
+    private func orientationFromInterfaceOrientation(_ value: UIInterfaceOrientation) -> AVCaptureVideoOrientation? {
+        switch value {
+        case .portrait, .portraitUpsideDown:
+            return .portrait
+        case .landscapeLeft:
+            return .landscapeRight
+        case .landscapeRight:
+            return .landscapeLeft
+        default:
+            return nil
+        }
+    }
+
+    private func orientationFromGravity(_ gravity: CMAcceleration) -> AVCaptureVideoOrientation? {
+        let absX = abs(gravity.x)
+        let absY = abs(gravity.y)
+        if absY >= absX {
+            if gravity.y <= -0.75 || gravity.y >= 0.75 {
+                return .portrait
+            }
+            return nil
+        }
+        if gravity.x >= 0.65 { return .landscapeRight }
+        if gravity.x <= -0.65 { return .landscapeLeft }
+        return nil
     }
 
     // MARK: Adaptive bitrate + helpers

@@ -20,7 +20,9 @@ Project: `Win/ClientDotnet/WcsWinClient`
   - probes bitrate from `start` to `max`
   - detects saturation using `stats.dropped` and `stats.tx_ms`
   - applies best stable bitrate and re-enables auto bitrate window
-- One-click low-latency preview launch with `ffplay`
+- Local config draft mode:
+  - remote status no longer overwrites in-progress local edits
+  - `Sync remote` reloads remote config into the form
 
 ## Build
 ```powershell
@@ -44,7 +46,8 @@ Direct executable:
 2. Click `Start iProxy`.
 3. Click `Start`.
 4. Click `Calibrate`.
-5. Click `Preview ffplay`.
+5. For preview, click `Preview ffplay` or use Streamlabs/OBS media input URL:
+   - `tcp://127.0.0.1:5000?tcp_nodelay=1`
 
 No external install of `iproxy`/`ffplay` is required when using the built `bin` output.
 

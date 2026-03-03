@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Globalization;
 using System.Net.Sockets;
 using System.Text;
@@ -45,6 +45,7 @@ public partial class Form1 : Form
     private Button _restartButton = null!;
     private Button _keyframeButton = null!;
     private Button _applyButton = null!;
+    private Button _syncRemoteButton = null!;
     private Button _calibrateButton = null!;
     private Button _iproxyStartButton = null!;
     private Button _iproxyStopButton = null!;
@@ -52,6 +53,9 @@ public partial class Form1 : Form
 
     private readonly System.Windows.Forms.Timer _statusTimer;
     private bool _statusRefreshInFlight;
+    private bool _updatingUiFromRemote;
+    private bool _configDirty;
+    private bool _remoteConfigPending;
     private CancellationTokenSource? _calibrationCts;
     private Process? _videoIproxyProcess;
     private Process? _controlIproxyProcess;
@@ -81,6 +85,7 @@ public partial class Form1 : Form
 
         Log("Client ready.");
         Log("Tip: use 'Start iProxy' to open USB forwarding from this app.");
+        Log("Tip: use 'Preview ffplay' for local low-latency preview.");
     }
 
     private void BuildUi()
@@ -169,14 +174,15 @@ public partial class Form1 : Form
 
         _iproxyStartButton = AddButton(controlsPanel, "Start iProxy", 12, y, 104);
         _iproxyStopButton = AddButton(controlsPanel, "Stop iProxy", 122, y, 104);
-        _statusButton = AddButton(controlsPanel, "Status", 232, y, 80);
-        _startButton = AddButton(controlsPanel, "Start", 318, y, 80);
-        _stopButton = AddButton(controlsPanel, "Stop", 404, y, 80);
-        _restartButton = AddButton(controlsPanel, "Restart", 490, y, 80);
-        _keyframeButton = AddButton(controlsPanel, "Keyframe", 576, y, 80);
-        _applyButton = AddButton(controlsPanel, "Apply", 662, y, 80);
-        _calibrateButton = AddButton(controlsPanel, "Calibrate", 748, y, 96);
-        _previewButton = AddButton(controlsPanel, "Preview ffplay", 850, y, 120);
+        _statusButton = AddButton(controlsPanel, "Status", 232, y, 76);
+        _startButton = AddButton(controlsPanel, "Start", 314, y, 76);
+        _stopButton = AddButton(controlsPanel, "Stop", 396, y, 76);
+        _restartButton = AddButton(controlsPanel, "Restart", 478, y, 80);
+        _keyframeButton = AddButton(controlsPanel, "Keyframe", 564, y, 82);
+        _applyButton = AddButton(controlsPanel, "Apply", 652, y, 78);
+        _syncRemoteButton = AddButton(controlsPanel, "Sync remote", 736, y, 96);
+        _calibrateButton = AddButton(controlsPanel, "Calibrate", 838, y, 92);
+        _previewButton = AddButton(controlsPanel, "Preview ffplay", 936, y, 124);
 
         y += 38;
 
@@ -190,8 +196,10 @@ public partial class Form1 : Form
         _metricsBox = AddTextBox(controlsPanel, "", 62, y, 700);
         _metricsBox.ReadOnly = true;
 
+        BindConfigDirtyTracking();
         BindEvents();
         UpdateIproxyButtonsState();
+        ClearConfigDirty();
     }
 
     private void BindEvents()
@@ -232,6 +240,7 @@ public partial class Form1 : Form
                 var cfg = BuildConfigFromUi();
                 using var doc = await SendControlCommandAsync(new { cmd = "apply", config = cfg }, CancellationToken.None);
                 Log("Apply: " + doc.RootElement.GetRawText());
+                ClearConfigDirty();
                 await RefreshStatusAsync(logRawJson: false);
             }
             catch (Exception ex)
@@ -240,14 +249,33 @@ public partial class Form1 : Form
             }
         };
 
+        _syncRemoteButton.Click += async (_, _) =>
+        {
+            ClearConfigDirty();
+            await RefreshStatusAsync(logRawJson: true);
+        };
+
         _calibrateButton.Click += async (_, _) => await RunCalibrationAsync();
 
-        _previewButton.Click += (_, _) =>
+        _previewButton.Click += async (_, _) =>
         {
             try
             {
+                try
+                {
+                    using var keyframeDoc = await SendControlCommandAsync(new { cmd = "request_keyframe" }, CancellationToken.None);
+                    _ = keyframeDoc.RootElement;
+                }
+                catch (Exception ex)
+                {
+                    Log("Preview preflight keyframe warning: " + ex.Message);
+                }
+
                 var uri = $"tcp://{GetHost()}:{GetVideoPort()}?tcp_nodelay=1";
-                var args = $"-fflags nobuffer -flags low_delay -probesize 2048 -analyzeduration 0 -vsync drop -use_wallclock_as_timestamps 1 -i \"{uri}\"";
+                var forceH264 = string.Equals(_protocolBox.SelectedItem?.ToString(), "annexb", StringComparison.OrdinalIgnoreCase)
+                    ? "-f h264 "
+                    : string.Empty;
+                var args = $"-fflags nobuffer -flags low_delay -framedrop -probesize 2048 -analyzeduration 0 {forceH264}-vsync drop -use_wallclock_as_timestamps 1 -i \"{uri}\"";
                 var ffplay = ResolveFfplayPath();
                 Process.Start(new ProcessStartInfo
                 {
@@ -275,6 +303,45 @@ public partial class Form1 : Form
         {
             Log($"{cmd} error: {ex.Message}");
         }
+    }
+
+    private void BindConfigDirtyTracking()
+    {
+        void MarkIfUserEdit()
+        {
+            if (!_updatingUiFromRemote)
+            {
+                MarkConfigDirty();
+            }
+        }
+
+        _videoPortBox.TextChanged += (_, _) => MarkIfUserEdit();
+        _controlPortBox.TextChanged += (_, _) => MarkIfUserEdit();
+        _resolutionBox.SelectedIndexChanged += (_, _) => MarkIfUserEdit();
+        _fpsBox.TextChanged += (_, _) => MarkIfUserEdit();
+        _bitrateBox.TextChanged += (_, _) => MarkIfUserEdit();
+        _profileBox.SelectedIndexChanged += (_, _) => MarkIfUserEdit();
+        _entropyBox.SelectedIndexChanged += (_, _) => MarkIfUserEdit();
+        _protocolBox.SelectedIndexChanged += (_, _) => MarkIfUserEdit();
+        _orientationBox.SelectedIndexChanged += (_, _) => MarkIfUserEdit();
+        _intraOnlyCheck.CheckedChanged += (_, _) => MarkIfUserEdit();
+        _autoRotateCheck.CheckedChanged += (_, _) => MarkIfUserEdit();
+        _autoBitrateCheck.CheckedChanged += (_, _) => MarkIfUserEdit();
+        _minBitrateBox.TextChanged += (_, _) => MarkIfUserEdit();
+        _maxBitrateBox.TextChanged += (_, _) => MarkIfUserEdit();
+    }
+
+    private void MarkConfigDirty()
+    {
+        _configDirty = true;
+        _syncRemoteButton.Enabled = true;
+    }
+
+    private void ClearConfigDirty()
+    {
+        _configDirty = false;
+        _remoteConfigPending = false;
+        _syncRemoteButton.Enabled = false;
     }
 
     private void StartIproxyTunnels()
@@ -413,19 +480,21 @@ public partial class Form1 : Form
 
             if (root.TryGetProperty("config", out var cfg))
             {
-                TrySetComboFromJson(_resolutionBox, cfg, "resolution");
-                TrySetComboFromJson(_profileBox, cfg, "profile");
-                TrySetComboFromJson(_entropyBox, cfg, "entropy");
-                TrySetComboFromJson(_protocolBox, cfg, "protocol");
-                TrySetComboFromJson(_orientationBox, cfg, "orientation");
-
-                _fpsBox.Text = GetDouble(cfg, "fps", 120).ToString("0.##", CultureInfo.InvariantCulture);
-                _bitrateBox.Text = (GetInt(cfg, "bitrate", 35_000_000) / 1_000_000.0).ToString("0.##", CultureInfo.InvariantCulture);
-                _minBitrateBox.Text = (GetInt(cfg, "min_bitrate", 6_000_000) / 1_000_000.0).ToString("0.##", CultureInfo.InvariantCulture);
-                _maxBitrateBox.Text = (GetInt(cfg, "max_bitrate", 120_000_000) / 1_000_000.0).ToString("0.##", CultureInfo.InvariantCulture);
-                _intraOnlyCheck.Checked = GetBool(cfg, "intra_only", false);
-                _autoRotateCheck.Checked = GetBool(cfg, "auto_rotate", false);
-                _autoBitrateCheck.Checked = GetBool(cfg, "auto_bitrate", true);
+                if (!_configDirty)
+                {
+                    ApplyRemoteConfigToUi(root, cfg);
+                    _remoteConfigPending = false;
+                    _syncRemoteButton.Enabled = false;
+                }
+                else
+                {
+                    if (!_remoteConfigPending)
+                    {
+                        Log("Remote config changed while local edits are pending. Click 'Sync remote' or 'Apply'.");
+                    }
+                    _remoteConfigPending = true;
+                    _syncRemoteButton.Enabled = true;
+                }
             }
         }
         catch (Exception ex)
@@ -583,6 +652,36 @@ public partial class Form1 : Form
     private int GetVideoPort() => Math.Clamp(ParseInt(_videoPortBox.Text, 5000), 1024, 65534);
 
     private int GetControlPort() => Math.Clamp(ParseInt(_controlPortBox.Text, 5001), 1025, 65535);
+
+    private void ApplyRemoteConfigToUi(JsonElement root, JsonElement cfg)
+    {
+        _updatingUiFromRemote = true;
+        try
+        {
+            int videoPort = GetInt(root, "video_port", GetVideoPort());
+            int controlPort = GetInt(root, "control_port", GetControlPort());
+            _videoPortBox.Text = Math.Clamp(videoPort, 1024, 65534).ToString(CultureInfo.InvariantCulture);
+            _controlPortBox.Text = Math.Clamp(controlPort, 1025, 65535).ToString(CultureInfo.InvariantCulture);
+
+            TrySetComboFromJson(_resolutionBox, cfg, "resolution");
+            TrySetComboFromJson(_profileBox, cfg, "profile");
+            TrySetComboFromJson(_entropyBox, cfg, "entropy");
+            TrySetComboFromJson(_protocolBox, cfg, "protocol");
+            TrySetComboFromJson(_orientationBox, cfg, "orientation");
+
+            _fpsBox.Text = GetDouble(cfg, "fps", 120).ToString("0.##", CultureInfo.InvariantCulture);
+            _bitrateBox.Text = (GetInt(cfg, "bitrate", 35_000_000) / 1_000_000.0).ToString("0.##", CultureInfo.InvariantCulture);
+            _minBitrateBox.Text = (GetInt(cfg, "min_bitrate", 6_000_000) / 1_000_000.0).ToString("0.##", CultureInfo.InvariantCulture);
+            _maxBitrateBox.Text = (GetInt(cfg, "max_bitrate", 120_000_000) / 1_000_000.0).ToString("0.##", CultureInfo.InvariantCulture);
+            _intraOnlyCheck.Checked = GetBool(cfg, "intra_only", false);
+            _autoRotateCheck.Checked = GetBool(cfg, "auto_rotate", false);
+            _autoBitrateCheck.Checked = GetBool(cfg, "auto_bitrate", true);
+        }
+        finally
+        {
+            _updatingUiFromRemote = false;
+        }
+    }
 
     private Dictionary<string, object> BuildConfigFromUi()
     {
@@ -976,3 +1075,4 @@ internal sealed class WcsControlClient
         return string.Equals(t.GetString(), "hello", StringComparison.OrdinalIgnoreCase);
     }
 }
+
