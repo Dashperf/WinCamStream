@@ -62,6 +62,7 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
     var targetWidth: Int = 1920
     var targetHeight: Int = 1080
     var targetFPS: Double = 120
+    private var runtimeFPS: Double = 120
     var intraOnly: Bool = false
     var bitrate: Int = 35_000_000
     var outputProtocol: OutputProtocol = .annexb
@@ -76,6 +77,7 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
     // MARK: Anti-dérive / sécurité
     fileprivate var sentCodecHeader = false
     fileprivate var forceIDRNext = false
+    private let inFlightLock = NSLock()
     private var inFlightSends = 0
     private let maxInFlightSends = 16
 
@@ -84,6 +86,10 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
     private var bytesWindow: Int = 0
     private var framesWindow: Int = 0
     private var droppedWindow: Int = 0
+    private var dropCaptureWindow: Int = 0
+    private var dropEncodeWindow: Int = 0
+    private var dropQueueWindow: Int = 0
+    private var dropSendWindow: Int = 0
     private var sendLatencyMsWindow: Double = 0
     private var sendEventsWindow: Int = 0
     private var lastFps: Int = 0
@@ -92,6 +98,8 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
     private var lastTxMs: Double = 0
     private var abrBadWindows: Int = 0
     private var abrGoodWindows: Int = 0
+    private var fpsDownWindows: Int = 0
+    private var fpsUpWindows: Int = 0
 
     // State
     private enum State { case idle, starting, running, stopping }
@@ -117,6 +125,7 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
         targetWidth  = p.resolution.width
         targetHeight = p.resolution.height
         targetFPS    = p.fps
+        runtimeFPS   = p.fps
         bitrate      = Int(p.bitrate)
         intraOnly    = p.intraOnly
         outputProtocol = p.outputProtocol
@@ -182,18 +191,13 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
     /// Modifs à chaud (bitrate, fps, GOP, orientation, auto-rotate)
     private func applyLiveTweaks() {
         sessionQ.async {
+            self.runtimeFPS = self.targetFPS
+            self.fpsDownWindows = 0
+            self.fpsUpWindows = 0
             if let vt = self.vtSession {
                 self.applyEncoderRateControlProperties(vt)
             }
-            if let dev = self.device {
-                do {
-                    try dev.lockForConfiguration()
-                    let ts = CMTime(value: 1, timescale: CMTimeScale(max(1.0, self.targetFPS)))
-                    dev.activeVideoMinFrameDuration = ts
-                    dev.activeVideoMaxFrameDuration = ts
-                    dev.unlockForConfiguration()
-                } catch { /* ignore */ }
-            }
+            self.applyRuntimeFpsToCaptureDevice()
             self.applyCaptureOrientation(self.orientation)
             if self.autoRotate {
                 self.installOrientationObserverIfNeeded()
@@ -231,16 +235,22 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
 
                 self.sentCodecHeader = false
                 self.forceIDRNext = true
-                self.inFlightSends = 0
+                self.resetInFlightSends()
                 self.activeVideoConnectionId = nil
                 self.videoClientReady = false
                 self.bytesWindow = 0
                 self.framesWindow = 0
                 self.droppedWindow = 0
+                self.dropCaptureWindow = 0
+                self.dropEncodeWindow = 0
+                self.dropQueueWindow = 0
+                self.dropSendWindow = 0
                 self.sendLatencyMsWindow = 0
                 self.sendEventsWindow = 0
                 self.abrBadWindows = 0
                 self.abrGoodWindows = 0
+                self.fpsDownWindows = 0
+                self.fpsUpWindows = 0
 
                 DispatchQueue.main.async {
                     UIApplication.shared.isIdleTimerDisabled = true
@@ -283,11 +293,13 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
 
             self.connection?.cancel(); self.connection = nil
             self.listener?.cancel(); self.listener = nil
-            self.inFlightSends = 0
+            self.resetInFlightSends()
             self.activeVideoConnectionId = nil
             self.videoClientReady = false
             self.abrBadWindows = 0
             self.abrGoodWindows = 0
+            self.fpsDownWindows = 0
+            self.fpsUpWindows = 0
 
             DispatchQueue.main.async {
                 UIApplication.shared.isIdleTimerDisabled = false
@@ -365,7 +377,7 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
                 self.connection = conn
                 self.sentCodecHeader = false
                 self.forceIDRNext = true
-                self.inFlightSends = 0
+                self.resetInFlightSends()
                 self.activeVideoConnectionId = incomingId
                 self.videoClientReady = false
                 conn.stateUpdateHandler = { [weak self] st in
@@ -378,7 +390,7 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
                             self.forceIDRNext = true
                         case .failed(_), .cancelled:
                             self.videoClientReady = false
-                            self.inFlightSends = 0
+                            self.resetInFlightSends()
                             self.connection = nil
                             self.activeVideoConnectionId = nil
                         default:
@@ -627,6 +639,7 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
             "width": targetWidth,
             "height": targetHeight,
             "fps": targetFPS,
+            "effective_fps": runtimeFPS,
             "bitrate": bitrate,
             "intra_only": intraOnly,
             "protocol": outputProtocolString(outputProtocol),
@@ -672,8 +685,12 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
 
         let maxF = maxSupportedFPS(width: targetWidth, height: targetHeight)
         if targetFPS > maxF { targetFPS = maxF }
-        if !selectFormat(device: cam, width: targetWidth, height: targetHeight, fps: targetFPS) {
-            _ = selectFormat(device: cam, width: targetWidth, height: targetHeight, fps: min(60.0, maxF))
+        runtimeFPS = targetFPS
+        if !selectFormat(device: cam, width: targetWidth, height: targetHeight, fps: runtimeFPS) {
+            let fallbackFPS = min(60.0, maxF)
+            if selectFormat(device: cam, width: targetWidth, height: targetHeight, fps: fallbackFPS) {
+                runtimeFPS = fallbackFPS
+            }
         }
 
         videoOutput.alwaysDiscardsLateVideoFrames = true
@@ -693,7 +710,7 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
         session.commitConfiguration()
         session.startRunning()
         DispatchQueue.main.async {
-            self.status = "Capture OK (\(self.targetWidth)x\(self.targetHeight) @\(Int(self.targetFPS)) fps tentative)"
+            self.status = "Capture OK (\(self.targetWidth)x\(self.targetHeight) @\(Int(self.runtimeFPS)) fps)"
         }
     }
 
@@ -777,6 +794,19 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
 
     private func statusUpdate(_ s: String) { DispatchQueue.main.async { self.status = s } }
 
+    private func applyRuntimeFpsToCaptureDevice() {
+        guard let dev = device else { return }
+        do {
+            try dev.lockForConfiguration()
+            let ts = CMTime(value: 1, timescale: CMTimeScale(max(1.0, runtimeFPS)))
+            dev.activeVideoMinFrameDuration = ts
+            dev.activeVideoMaxFrameDuration = ts
+            dev.unlockForConfiguration()
+        } catch {
+            // Keep streaming with previous timings.
+        }
+    }
+
     private func applyEncoderRateControlProperties(_ vt: VTCompressionSession) {
         let boundedBitrate = clampBitrate(bitrate)
         VTSessionSetProperty(vt, key: kVTCompressionPropertyKey_AverageBitRate,
@@ -786,13 +816,13 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
         VTSessionSetProperty(vt, key: kVTCompressionPropertyKey_DataRateLimits,
                              value: limits as CFArray)
         VTSessionSetProperty(vt, key: kVTCompressionPropertyKey_ExpectedFrameRate,
-                             value: NSNumber(value: Int32(max(1.0, targetFPS))))
+                             value: NSNumber(value: Int32(max(1.0, runtimeFPS))))
         let gop: Int32
         if intraOnly {
             gop = 1
         } else {
             // Keep GOP short enough to recover quickly if a frame is lost in transport.
-            gop = Int32(max(4, min(30, Int(targetFPS / 4.0))))
+            gop = Int32(max(4, min(30, Int(runtimeFPS / 4.0))))
         }
         VTSessionSetProperty(vt, key: kVTCompressionPropertyKey_MaxKeyFrameInterval,
                              value: NSNumber(value: gop))
@@ -805,8 +835,9 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
                        didOutput sampleBuffer: CMSampleBuffer,
                        from connection: AVCaptureConnection) {
         guard self.connection != nil else { return }
-        if inFlightSends >= (maxInFlightSends * 4) {
+        if currentInFlightSends() >= (maxInFlightSends * 4) {
             droppedWindow += 1
+            dropCaptureWindow += 1
             return // évite de remplir la file quand le lien plafonne
         }
 
@@ -831,6 +862,7 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
                                                  infoFlagsOut: &flags)
         if st != noErr {
             droppedWindow += 1
+            dropEncodeWindow += 1
             statusUpdate("Encode err \(st)")
         }
     }
@@ -845,8 +877,9 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
     private func handleEncodedSampleBufferOnSessionQ(_ sbuf: CMSampleBuffer) {
         guard let conn = connection,
               let dataBuffer = CMSampleBufferGetDataBuffer(sbuf) else { return }
-        if inFlightSends >= maxInFlightSends {
+        if !tryAcquireInFlightSlot(limit: maxInFlightSends) {
             droppedWindow += 1
+            dropQueueWindow += 1
             return
         }
 
@@ -879,24 +912,25 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
         if !payload.isEmpty {
             bytesWindow += payload.count
             framesWindow += 1
-            inFlightSends += 1
             let sendStartNs = DispatchTime.now().uptimeNanoseconds
             conn.send(content: payload, completion: .contentProcessed { [weak self] err in
                 guard let self = self else { return }
+                let endNs = DispatchTime.now().uptimeNanoseconds
+                self.releaseInFlightSlot()
                 self.sessionQ.async {
-                    let endNs = DispatchTime.now().uptimeNanoseconds
                     let sendMs = Double(endNs - sendStartNs) / 1_000_000.0
                     self.sendLatencyMsWindow += sendMs
                     self.sendEventsWindow += 1
                     if err != nil {
                         self.droppedWindow += 1
+                        self.dropSendWindow += 1
                         self.forceIDRNext = true
                     }
-                    if self.inFlightSends > 0 { self.inFlightSends -= 1 }
                 }
             })
         } else {
             droppedWindow += 1
+            dropEncodeWindow += 1
         }
     }
 
@@ -911,8 +945,11 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
             let dropped = self.droppedWindow
             let mbps = Double(self.bytesWindow) * 8.0 / 1_000_000.0
             let avgSendMs = self.sendEventsWindow > 0 ? (self.sendLatencyMsWindow / Double(self.sendEventsWindow)) : 0
-            let inFlight = self.inFlightSends
-            let metric = String(format: "~%2d fps | ~%.1f Mb/s | drop:%d | tx:%.1f ms | q:%d", fps, mbps, dropped, avgSendMs, inFlight)
+            let inFlight = self.currentInFlightSends()
+            let metric = String(
+                format: "~%2d fps(eff:%2.0f) | ~%.1f Mb/s | drop:%d[c:%d e:%d q:%d s:%d] | tx:%.1f ms | q:%d",
+                fps, self.runtimeFPS, mbps, dropped, self.dropCaptureWindow, self.dropEncodeWindow, self.dropQueueWindow, self.dropSendWindow, avgSendMs, inFlight
+            )
                 + (self.autoBitrate ? " | abr:\(self.bitrate/1_000_000)M" : "")
             DispatchQueue.main.async { self.metrics = metric }
 
@@ -922,6 +959,7 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
             self.lastTxMs = avgSendMs
 
             self.updateAdaptiveBitrate(sentFrames: fps, droppedFrames: dropped, avgSendMs: avgSendMs)
+            self.updateDynamicFPS(sentFrames: fps, droppedFrames: dropped, avgSendMs: avgSendMs)
             if dropped > 0 {
                 self.forceIDRNext = true
             }
@@ -929,6 +967,10 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
             self.framesWindow = 0
             self.bytesWindow = 0
             self.droppedWindow = 0
+            self.dropCaptureWindow = 0
+            self.dropEncodeWindow = 0
+            self.dropQueueWindow = 0
+            self.dropSendWindow = 0
             self.sendLatencyMsWindow = 0
             self.sendEventsWindow = 0
         }
@@ -940,6 +982,10 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
         statsTimer?.cancel(); statsTimer = nil
         framesWindow = 0; bytesWindow = 0
         droppedWindow = 0
+        dropCaptureWindow = 0
+        dropEncodeWindow = 0
+        dropQueueWindow = 0
+        dropSendWindow = 0
         sendLatencyMsWindow = 0
         sendEventsWindow = 0
         lastFps = 0
@@ -948,6 +994,8 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
         lastTxMs = 0
         abrBadWindows = 0
         abrGoodWindows = 0
+        fpsDownWindows = 0
+        fpsUpWindows = 0
     }
 
     private func applyCaptureOrientation(_ newOrientation: AVCaptureVideoOrientation) {
@@ -1106,6 +1154,52 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
     }
 
     // MARK: Adaptive bitrate + helpers
+    private func updateDynamicFPS(sentFrames: Int, droppedFrames: Int, avgSendMs: Double) {
+        guard isRunning else { return }
+        let total = sentFrames + droppedFrames
+        guard total > 0 else { return }
+
+        let frameBudgetMs = 1000.0 / max(1.0, runtimeFPS)
+        let dropRatio = Double(droppedFrames) / Double(total)
+        let inFlight = currentInFlightSends()
+        let queueBusy = inFlight >= max(4, (maxInFlightSends * 3) / 4)
+
+        let badWindow = dropRatio > 0.08 || avgSendMs > (frameBudgetMs * 0.92) || queueBusy
+        let goodWindow = dropRatio == 0 && avgSendMs > 0 && avgSendMs < (frameBudgetMs * 0.45) && inFlight <= max(2, maxInFlightSends / 4)
+
+        if badWindow {
+            fpsDownWindows += 1
+            fpsUpWindows = 0
+        } else if goodWindow && runtimeFPS + 0.5 < targetFPS {
+            fpsUpWindows += 1
+            fpsDownWindows = 0
+        } else {
+            fpsDownWindows = 0
+            fpsUpWindows = 0
+        }
+
+        let minFps = targetWidth >= 3840 ? 24.0 : 30.0
+        if fpsDownWindows >= 2 {
+            let next = max(minFps, floor(runtimeFPS * 0.85))
+            fpsDownWindows = 0
+            if next + 0.5 < runtimeFPS {
+                runtimeFPS = next
+                applyRuntimeFpsToCaptureDevice()
+                if let vt = vtSession { applyEncoderRateControlProperties(vt) }
+                forceIDRNext = true
+                statusUpdate("Runtime FPS downshift to \(Int(runtimeFPS)) to keep latency low")
+            }
+        } else if fpsUpWindows >= 5 {
+            let next = min(targetFPS, ceil(runtimeFPS * 1.05))
+            fpsUpWindows = 0
+            if next > runtimeFPS + 0.5 {
+                runtimeFPS = next
+                applyRuntimeFpsToCaptureDevice()
+                if let vt = vtSession { applyEncoderRateControlProperties(vt) }
+            }
+        }
+    }
+
     private func updateAdaptiveBitrate(sentFrames: Int, droppedFrames: Int, avgSendMs: Double) {
         guard autoBitrate, isRunning else { return }
         let total = sentFrames + droppedFrames
@@ -1113,7 +1207,7 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
 
         normalizeBitrateBounds()
 
-        let frameBudgetMs = 1000.0 / max(1.0, targetFPS)
+        let frameBudgetMs = 1000.0 / max(1.0, runtimeFPS)
         let dropRatio = Double(droppedFrames) / Double(total)
 
         var next = bitrate
@@ -1160,6 +1254,33 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
     private func controlPort(forVideoPort port: UInt16) -> UInt16 {
         if port >= UInt16.max { return UInt16.max }
         return port &+ 1
+    }
+
+    private func resetInFlightSends() {
+        inFlightLock.lock()
+        inFlightSends = 0
+        inFlightLock.unlock()
+    }
+
+    private func currentInFlightSends() -> Int {
+        inFlightLock.lock()
+        let value = inFlightSends
+        inFlightLock.unlock()
+        return value
+    }
+
+    private func tryAcquireInFlightSlot(limit: Int) -> Bool {
+        inFlightLock.lock()
+        defer { inFlightLock.unlock() }
+        if inFlightSends >= limit { return false }
+        inFlightSends += 1
+        return true
+    }
+
+    private func releaseInFlightSlot() {
+        inFlightLock.lock()
+        if inFlightSends > 0 { inFlightSends -= 1 }
+        inFlightLock.unlock()
     }
 
     private func stateString() -> String {
