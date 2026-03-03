@@ -45,6 +45,8 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
     // MARK: Réseau
     private var listener: NWListener?
     private var connection: NWConnection?
+    private var activeVideoConnectionId: ObjectIdentifier?
+    private var videoClientReady = false
     private var controlListener: NWListener?
     private var activeControlPort: UInt16?
     private let maxControlLineBytes = 16 * 1024
@@ -228,6 +230,8 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
                 self.sentCodecHeader = false
                 self.forceIDRNext = true
                 self.inFlightSends = 0
+                self.activeVideoConnectionId = nil
+                self.videoClientReady = false
                 self.bytesWindow = 0
                 self.framesWindow = 0
                 self.droppedWindow = 0
@@ -276,6 +280,8 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
             self.connection?.cancel(); self.connection = nil
             self.listener?.cancel(); self.listener = nil
             self.inFlightSends = 0
+            self.activeVideoConnectionId = nil
+            self.videoClientReady = false
 
             DispatchQueue.main.async {
                 UIApplication.shared.isIdleTimerDisabled = false
@@ -343,19 +349,40 @@ final class Streamer: NSObject, ObservableObject, AVCaptureVideoDataOutputSample
             }
             lst.newConnectionHandler = { [weak self] conn in
                 guard let self = self else { return }
+                let incomingId = ObjectIdentifier(conn)
+                if self.videoClientReady, self.connection != nil {
+                    // Keep current stream stable: reject probe/reconnect attempts while one client is already active.
+                    conn.cancel()
+                    return
+                }
                 self.connection?.cancel()
                 self.connection = conn
                 self.sentCodecHeader = false
                 self.forceIDRNext = true
                 self.inFlightSends = 0
+                self.activeVideoConnectionId = incomingId
+                self.videoClientReady = false
                 conn.stateUpdateHandler = { [weak self] st in
-                    if case .failed = st {
-                        self?.sessionQ.async { self?.inFlightSends = 0 }
+                    guard let self = self else { return }
+                    self.sessionQ.async {
+                        guard self.activeVideoConnectionId == incomingId else { return }
+                        switch st {
+                        case .ready:
+                            self.videoClientReady = true
+                            self.forceIDRNext = true
+                        case .failed(_), .cancelled:
+                            self.videoClientReady = false
+                            self.inFlightSends = 0
+                            self.connection = nil
+                            self.activeVideoConnectionId = nil
+                        default:
+                            break
+                        }
                     }
-                    if case .cancelled = st {
-                        self?.sessionQ.async { self?.inFlightSends = 0 }
+                    DispatchQueue.main.async {
+                        guard self.activeVideoConnectionId == incomingId else { return }
+                        self.status = "Video client: \(st)"
                     }
-                    DispatchQueue.main.async { self?.status = "Video client: \(st)" }
                 }
                 conn.start(queue: self.networkQ)
             }
