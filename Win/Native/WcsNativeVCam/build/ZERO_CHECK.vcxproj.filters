@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="18.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\lilian.pigassou\OneDrive - Dashperf\Documents\GitHub\WinCamStream\Win\Native\WcsNativeVCam\build\CMakeFiles\dfe3b91a2a60b1af4c0ab70a646c98a9\generate.stamp.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{55A518AC-5194-350F-956B-B10876715079}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

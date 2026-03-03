@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace WcsWinClient;
 
@@ -40,6 +41,8 @@ public partial class Form1 : Form
     private Button _applyButton = null!;
     private Button _iproxyRestartButton = null!;
     private Button _previewButton = null!;
+    private Button _vcamStartButton = null!;
+    private Button _vcamStopButton = null!;
 
     private readonly System.Windows.Forms.Timer _statusTimer;
     private bool _statusRefreshInFlight;
@@ -49,6 +52,7 @@ public partial class Form1 : Form
     private long _lastConfigRevision;
     private Process? _videoIproxyProcess;
     private Process? _controlIproxyProcess;
+    private Process? _vcamProcess;
 
     public Form1()
     {
@@ -68,12 +72,15 @@ public partial class Form1 : Form
         FormClosed += (_, _) =>
         {
             _statusTimer.Stop();
+            StopVirtualCamBridge(logWhenAlreadyStopped: false);
             StopIproxyTunnels(logWhenAlreadyStopped: false);
         };
 
         Log("Client ready.");
         Log("Tip: iProxy auto-starts at launch. Use 'Restart iProxy' if needed.");
         Log("Tip: use 'Preview ffplay' for local low-latency preview.");
+        Log("Tip: use 'Start VCam' to publish stream to UnityCapture virtual camera (native C++ bridge).");
+        LogIproxyPrerequisites();
         StartIproxyTunnels();
     }
 
@@ -155,6 +162,8 @@ public partial class Form1 : Form
         _keyframeButton = AddButton(controlsPanel, "Keyframe", 466, y, 82);
         _applyButton = AddButton(controlsPanel, "Apply", 554, y, 78);
         _previewButton = AddButton(controlsPanel, "Preview ffplay", 638, y, 124);
+        _vcamStartButton = AddButton(controlsPanel, "Start VCam", 768, y, 100);
+        _vcamStopButton = AddButton(controlsPanel, "Stop VCam", 874, y, 100);
 
         y += 38;
 
@@ -249,6 +258,9 @@ public partial class Form1 : Form
                 Log("Preview error: " + ex.Message);
             }
         };
+
+        _vcamStartButton.Click += (_, _) => StartVirtualCamBridge();
+        _vcamStopButton.Click += (_, _) => StopVirtualCamBridge(logWhenAlreadyStopped: true);
     }
 
     private async Task SendSimpleCommandAsync(string cmd)
@@ -313,6 +325,10 @@ public partial class Form1 : Form
             _controlPortBox.Text = controlPort.ToString(CultureInfo.InvariantCulture);
 
             var iproxyExe = ResolveIproxyPath();
+            if (!File.Exists(iproxyExe))
+            {
+                throw new FileNotFoundException("iproxy.exe introuvable.", iproxyExe);
+            }
             _videoIproxyProcess = StartIproxyProcess(iproxyExe, videoPort, videoPort, "video");
             _controlIproxyProcess = StartIproxyProcess(iproxyExe, controlPort, controlPort, "control");
 
@@ -338,7 +354,7 @@ public partial class Form1 : Form
         }
     }
 
-    private static Process StartIproxyProcess(string iproxyExe, int localPort, int devicePort, string label)
+    private Process StartIproxyProcess(string iproxyExe, int localPort, int devicePort, string label)
     {
         var info = new ProcessStartInfo
         {
@@ -347,14 +363,45 @@ public partial class Form1 : Form
             WorkingDirectory = Path.GetDirectoryName(iproxyExe) ?? AppContext.BaseDirectory,
             UseShellExecute = false,
             CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
         };
 
         var process = Process.Start(info) ?? throw new InvalidOperationException($"Failed to start iProxy for {label} tunnel.");
         if (process.WaitForExit(300))
         {
+            var stderr = process.StandardError.ReadToEnd().Trim();
+            var stdout = process.StandardOutput.ReadToEnd().Trim();
+            var details = string.IsNullOrWhiteSpace(stderr) ? stdout : stderr;
             process.Dispose();
-            throw new InvalidOperationException($"iProxy exited immediately for {label} tunnel (port {localPort}).");
+            throw new InvalidOperationException(
+                string.IsNullOrWhiteSpace(details)
+                    ? $"iProxy exited immediately for {label} tunnel (port {localPort})."
+                    : $"iProxy exited immediately for {label} tunnel (port {localPort}): {details}"
+            );
         }
+
+        process.EnableRaisingEvents = true;
+        process.OutputDataReceived += (_, e) =>
+        {
+            if (!string.IsNullOrWhiteSpace(e.Data))
+            {
+                LogFromAnyThread($"[iproxy:{label}] {e.Data}");
+            }
+        };
+        process.ErrorDataReceived += (_, e) =>
+        {
+            if (!string.IsNullOrWhiteSpace(e.Data))
+            {
+                LogFromAnyThread($"[iproxy:{label}] {e.Data}");
+            }
+        };
+        process.Exited += (_, _) =>
+        {
+            LogFromAnyThread($"iProxy {label} tunnel exited (code {process.ExitCode}).");
+        };
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
 
         return process;
     }
@@ -402,6 +449,74 @@ public partial class Form1 : Form
         {
             return false;
         }
+    }
+
+    private void LogIproxyPrerequisites()
+    {
+        try
+        {
+            var iproxyPath = ResolveIproxyPath();
+            Log(File.Exists(iproxyPath)
+                ? $"iProxy binary: {iproxyPath}"
+                : $"iProxy binary missing: {iproxyPath}");
+
+            var ffplayPath = ResolveFfplayPath();
+            Log(File.Exists(ffplayPath)
+                ? $"ffplay binary: {ffplayPath}"
+                : $"ffplay binary missing: {ffplayPath}");
+
+            var serviceState = QueryWindowsServiceState("Apple Mobile Device Service");
+            if (serviceState is null)
+            {
+                Log("Prereq warning: Apple Mobile Device Service not found. Install Apple Devices/iTunes drivers for USB iPhone forwarding.");
+            }
+            else if (!string.Equals(serviceState, "RUNNING", StringComparison.OrdinalIgnoreCase))
+            {
+                Log($"Prereq warning: Apple Mobile Device Service is {serviceState}. Start it before using iProxy.");
+            }
+            else
+            {
+                Log("Apple Mobile Device Service is RUNNING.");
+            }
+        }
+        catch (Exception ex)
+        {
+            Log("Prereq check warning: " + ex.Message);
+        }
+    }
+
+    private static string? QueryWindowsServiceState(string serviceName)
+    {
+        var info = new ProcessStartInfo
+        {
+            FileName = "sc.exe",
+            Arguments = $"query \"{serviceName}\"",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+
+        using var process = Process.Start(info);
+        if (process is null)
+        {
+            return null;
+        }
+
+        if (!process.WaitForExit(1500))
+        {
+            try { process.Kill(entireProcessTree: true); } catch { }
+            return null;
+        }
+
+        var output = (process.StandardOutput.ReadToEnd() + "\n" + process.StandardError.ReadToEnd()).Trim();
+        if (process.ExitCode != 0 || string.IsNullOrWhiteSpace(output))
+        {
+            return null;
+        }
+
+        var match = Regex.Match(output, @"STATE\s*:\s*\d+\s+([A-Z_]+)", RegexOptions.IgnoreCase);
+        return match.Success ? match.Groups[1].Value.ToUpperInvariant() : null;
     }
 
     private async Task RefreshStatusAsync(bool logRawJson)
@@ -612,6 +727,29 @@ public partial class Form1 : Form
         _logBox.AppendText($"[{stamp}] {text}{Environment.NewLine}");
     }
 
+    private void LogFromAnyThread(string text)
+    {
+        if (IsDisposed)
+        {
+            return;
+        }
+
+        if (InvokeRequired)
+        {
+            try
+            {
+                BeginInvoke(new Action<string>(Log), text);
+            }
+            catch
+            {
+                // ignore shutdown races
+            }
+            return;
+        }
+
+        Log(text);
+    }
+
     private void SetActionButtonsEnabled(bool enabled)
     {
         _statusButton.Enabled = enabled;
@@ -621,11 +759,18 @@ public partial class Form1 : Form
         _keyframeButton.Enabled = enabled;
         _applyButton.Enabled = enabled;
         _previewButton.Enabled = enabled;
+        _vcamStartButton.Enabled = enabled;
+        _vcamStopButton.Enabled = enabled;
     }
 
     private void StartFfplayPreview(string ffplay, string uri)
     {
-        var primaryArgs = $"-fflags nobuffer -flags low_delay -framedrop -probesize 32768 -analyzeduration 0 -i \"{uri}\"";
+        if (!string.Equals(_protocolBox.SelectedItem?.ToString(), "annexb", StringComparison.OrdinalIgnoreCase))
+        {
+            Log("Preview warning: ffplay raw preview expects protocol=annexb.");
+        }
+
+        var primaryArgs = $"-f h264 -fflags nobuffer -flags low_delay -framedrop -probesize 2048 -analyzeduration 0 -sync ext -i \"{uri}\"";
         if (TryStartFfplay(ffplay, primaryArgs, out var primaryError))
         {
             Log($"Preview started with {ffplay} on {uri}");
@@ -634,7 +779,7 @@ public partial class Form1 : Form
 
         Log("Preview primary args failed: " + primaryError);
 
-        var fallbackArgs = $"-fflags nobuffer -flags low_delay -i \"{uri}\"";
+        var fallbackArgs = $"-fflags nobuffer -flags low_delay -probesize 32768 -analyzeduration 0 -i \"{uri}\"";
         if (TryStartFfplay(ffplay, fallbackArgs, out var fallbackError))
         {
             Log($"Preview fallback started with {ffplay} on {uri}");
@@ -642,6 +787,278 @@ public partial class Form1 : Form
         }
 
         throw new InvalidOperationException("ffplay launch failed. " + fallbackError);
+    }
+
+    private void StartVirtualCamBridge()
+    {
+        try
+        {
+            StopVirtualCamBridge(logWhenAlreadyStopped: false);
+
+            if (!string.Equals(_protocolBox.SelectedItem?.ToString(), "annexb", StringComparison.OrdinalIgnoreCase))
+            {
+                Log("VCam warning: protocol should be annexb for bridge compatibility.");
+            }
+
+            if (!EnsureUnityCaptureDriverReady())
+            {
+                return;
+            }
+
+            var ffmpegPath = ResolveFfmpegPath();
+            if (!File.Exists(ffmpegPath))
+            {
+                throw new FileNotFoundException("ffmpeg.exe not found for VCam bridge.", ffmpegPath);
+            }
+
+            var uri = $"tcp://{GetHost()}:{GetVideoPort()}?tcp_nodelay=1";
+            var (width, height) = GetResolutionDimensions(_resolutionBox.SelectedItem?.ToString() ?? "1080p");
+            var fps = (int)Math.Clamp(ParseDouble(_fpsBox.Text, 60), 1, 240);
+
+            var nativeExe = ResolveNativeVcamPath();
+            if (File.Exists(nativeExe))
+            {
+                var info = new ProcessStartInfo
+                {
+                    FileName = nativeExe,
+                    WorkingDirectory = Path.GetDirectoryName(nativeExe) ?? AppContext.BaseDirectory,
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true,
+                };
+                info.ArgumentList.Add("--url");
+                info.ArgumentList.Add(uri);
+                info.ArgumentList.Add("--width");
+                info.ArgumentList.Add(width.ToString(CultureInfo.InvariantCulture));
+                info.ArgumentList.Add("--height");
+                info.ArgumentList.Add(height.ToString(CultureInfo.InvariantCulture));
+                info.ArgumentList.Add("--fps");
+                info.ArgumentList.Add(fps.ToString(CultureInfo.InvariantCulture));
+                info.ArgumentList.Add("--cap");
+                info.ArgumentList.Add("0");
+                _vcamProcess = StartLoggedBackgroundProcess(info, "vcam-native");
+                Log($"VCam native bridge started with {nativeExe}.");
+                Log("Select 'Unity Video Capture' in Teams/Zoom/Meet/Streamlabs.");
+                return;
+            }
+
+            Log("Native VCam bridge binary not found, fallback to Python bridge. Build native via Win/Native/build_native_vcam.ps1 (requires Visual Studio C++ Build Tools).");
+            var scriptPath = ResolveVcamBridgeScriptPath();
+            if (!File.Exists(scriptPath))
+            {
+                throw new FileNotFoundException("Neither native nor Python VCam bridge found.", scriptPath);
+            }
+
+            var pythonExe = ResolvePythonPath(out var usePyLauncher);
+            var pyInfo = new ProcessStartInfo
+            {
+                FileName = pythonExe,
+                WorkingDirectory = Path.GetDirectoryName(scriptPath) ?? AppContext.BaseDirectory,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+            };
+            if (usePyLauncher)
+            {
+                pyInfo.ArgumentList.Add("-3");
+            }
+            pyInfo.ArgumentList.Add(scriptPath);
+            pyInfo.ArgumentList.Add("--url");
+            pyInfo.ArgumentList.Add(uri);
+            pyInfo.ArgumentList.Add("--ffmpeg");
+            pyInfo.ArgumentList.Add(ffmpegPath);
+            pyInfo.ArgumentList.Add("--width");
+            pyInfo.ArgumentList.Add(width.ToString(CultureInfo.InvariantCulture));
+            pyInfo.ArgumentList.Add("--height");
+            pyInfo.ArgumentList.Add(height.ToString(CultureInfo.InvariantCulture));
+            pyInfo.ArgumentList.Add("--fps");
+            pyInfo.ArgumentList.Add(fps.ToString(CultureInfo.InvariantCulture));
+            pyInfo.ArgumentList.Add("--backend");
+            pyInfo.ArgumentList.Add("unitycapture");
+            _vcamProcess = StartLoggedBackgroundProcess(pyInfo, "vcam-python");
+            Log($"VCam Python bridge started via {pythonExe}. Select 'Unity Video Capture' in your apps.");
+            Log("If Python fallback fails: install deps (`pip install numpy pyvirtualcam`).");
+        }
+        catch (Exception ex)
+        {
+            StopVirtualCamBridge(logWhenAlreadyStopped: false);
+            Log("VCam start error: " + ex.Message);
+        }
+    }
+
+    private Process StartLoggedBackgroundProcess(ProcessStartInfo info, string label)
+    {
+        var process = Process.Start(info) ?? throw new InvalidOperationException($"Failed to start {label} process.");
+        if (process.WaitForExit(1200))
+        {
+            var stderr = process.StandardError.ReadToEnd().Trim();
+            var stdout = process.StandardOutput.ReadToEnd().Trim();
+            var details = string.IsNullOrWhiteSpace(stderr) ? stdout : stderr;
+            process.Dispose();
+            throw new InvalidOperationException(
+                string.IsNullOrWhiteSpace(details)
+                    ? $"{label} exited immediately."
+                    : $"{label} exited immediately: {details}");
+        }
+
+        process.EnableRaisingEvents = true;
+        process.OutputDataReceived += (_, e) =>
+        {
+            if (!string.IsNullOrWhiteSpace(e.Data))
+            {
+                LogFromAnyThread($"[{label}] {e.Data}");
+            }
+        };
+        process.ErrorDataReceived += (_, e) =>
+        {
+            if (!string.IsNullOrWhiteSpace(e.Data))
+            {
+                LogFromAnyThread($"[{label}] {e.Data}");
+            }
+        };
+        process.Exited += (_, _) =>
+        {
+            LogFromAnyThread($"{label} exited (code {process.ExitCode}).");
+        };
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
+        return process;
+    }
+
+    private bool EnsureUnityCaptureDriverReady()
+    {
+        if (IsUnityCaptureDeviceAvailable())
+        {
+            return true;
+        }
+
+        Log("UnityCapture device not detected ('Unity Video Capture').");
+        var installerBat = ResolveUnityCaptureInstallPath();
+        if (!File.Exists(installerBat))
+        {
+            Log($"UnityCapture installer not found: {installerBat}");
+            Log("Install UnityCapture manually, then retry Start VCam.");
+            return false;
+        }
+
+        var prompt = MessageBox.Show(
+            this,
+            "UnityCapture virtual camera is not installed. Launch installer now (administrator/UAC required)?",
+            "Install UnityCapture",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Question);
+        if (prompt != DialogResult.Yes)
+        {
+            return false;
+        }
+
+        try
+        {
+            var info = new ProcessStartInfo
+            {
+                FileName = installerBat,
+                WorkingDirectory = Path.GetDirectoryName(installerBat) ?? AppContext.BaseDirectory,
+                UseShellExecute = true,
+                Verb = "runas",
+            };
+
+            using var process = Process.Start(info);
+            if (process is null)
+            {
+                Log("Failed to launch UnityCapture installer.");
+                return false;
+            }
+            process.WaitForExit(20000);
+        }
+        catch (Exception ex)
+        {
+            Log("UnityCapture installer error: " + ex.Message);
+            return false;
+        }
+
+        if (!IsUnityCaptureDeviceAvailable())
+        {
+            Log("UnityCapture still not detected after install. Reopen target app and retry.");
+            return false;
+        }
+
+        Log("UnityCapture driver detected.");
+        return true;
+    }
+
+    private bool IsUnityCaptureDeviceAvailable()
+    {
+        try
+        {
+            var ffmpeg = ResolveFfmpegPath();
+            if (!File.Exists(ffmpeg))
+            {
+                return false;
+            }
+
+            var info = new ProcessStartInfo
+            {
+                FileName = ffmpeg,
+                Arguments = "-hide_banner -f dshow -list_devices true -i dummy",
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+            };
+
+            using var process = Process.Start(info);
+            if (process is null)
+            {
+                return false;
+            }
+
+            if (!process.WaitForExit(6000))
+            {
+                try { process.Kill(entireProcessTree: true); } catch { }
+                return false;
+            }
+
+            var text = (process.StandardOutput.ReadToEnd() + "\n" + process.StandardError.ReadToEnd());
+            return text.IndexOf("Unity Video Capture", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private void StopVirtualCamBridge(bool logWhenAlreadyStopped)
+    {
+        if (_vcamProcess is null)
+        {
+            if (logWhenAlreadyStopped)
+            {
+                Log("VCam bridge not running.");
+            }
+            return;
+        }
+
+        try
+        {
+            if (!_vcamProcess.HasExited)
+            {
+                _vcamProcess.Kill(entireProcessTree: true);
+                _vcamProcess.WaitForExit(1500);
+            }
+
+            Log("VCam bridge stopped.");
+        }
+        catch (Exception ex)
+        {
+            Log("VCam stop warning: " + ex.Message);
+        }
+        finally
+        {
+            _vcamProcess.Dispose();
+            _vcamProcess = null;
+        }
     }
 
     private static bool TryStartFfplay(string ffplay, string args, out string error)
@@ -681,8 +1098,45 @@ public partial class Form1 : Form
     private static string ResolveFfplayPath() =>
         ResolveBinaryPath("ffplay.exe", Path.Combine("Win", "ffmpeg-master-latest-win64-gpl-shared", "bin"));
 
+    private static string ResolveFfmpegPath() =>
+        ResolveBinaryPath("ffmpeg.exe", Path.Combine("Win", "ffmpeg-master-latest-win64-gpl-shared", "bin"));
+
     private static string ResolveIproxyPath() =>
         ResolveBinaryPath("iproxy.exe", Path.Combine("Win", "Iproxy"));
+
+    private static string ResolveNativeVcamPath() =>
+        ResolveFilePath("wcs_native_vcam.exe", Path.Combine("Win", "Native", "Runtime"));
+
+    private static string ResolveUnityCaptureInstallPath()
+    {
+        var direct = Path.Combine(AppContext.BaseDirectory, "UnityCapture", "Install.bat");
+        if (File.Exists(direct))
+        {
+            return direct;
+        }
+        return ResolveFilePath("Install.bat", Path.Combine("Win", "VCam", "UnityCapture", "Install"));
+    }
+
+    private static string ResolveVcamBridgeScriptPath() =>
+        ResolveFilePath("wcs_vcam_bridge.py", Path.Combine("Win", "VCam"));
+
+    private static string ResolvePythonPath(out bool usePyLauncher)
+    {
+        if (TryFindExeInPath("python.exe", out var pythonPath))
+        {
+            usePyLauncher = false;
+            return pythonPath;
+        }
+
+        if (TryFindExeInPath("py.exe", out var pyLauncherPath))
+        {
+            usePyLauncher = true;
+            return pyLauncherPath;
+        }
+
+        usePyLauncher = false;
+        return "python";
+    }
 
     private static string ResolveBinaryPath(string exeName, string repoRelativeFolder)
     {
@@ -705,6 +1159,38 @@ public partial class Form1 : Form
         }
 
         return TryFindExeInPath(exeName, out var pathFromPath) ? pathFromPath : exeName;
+    }
+
+    private static string ResolveFilePath(string fileName, string repoRelativeFolder)
+    {
+        var bundled = Path.Combine(AppContext.BaseDirectory, fileName);
+        if (File.Exists(bundled))
+        {
+            return bundled;
+        }
+
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        for (int i = 0; i < 12 && dir is not null; i++)
+        {
+            var candidate = Path.Combine(dir.FullName, repoRelativeFolder, fileName);
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+            dir = dir.Parent;
+        }
+
+        return bundled;
+    }
+
+    private static (int width, int height) GetResolutionDimensions(string resolution)
+    {
+        return resolution.Trim().ToLowerInvariant() switch
+        {
+            "720p" => (1280, 720),
+            "4k" or "2160p" => (3840, 2160),
+            _ => (1920, 1080),
+        };
     }
 
     private static bool TryFindExeInPath(string exeName, out string fullPath)

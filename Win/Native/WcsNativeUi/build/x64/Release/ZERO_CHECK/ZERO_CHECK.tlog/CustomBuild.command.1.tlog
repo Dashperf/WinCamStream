@@ -1,0 +1,10 @@
+^C:\USERS\LILIAN.PIGASSOU\ONEDRIVE - DASHPERF\DOCUMENTS\GITHUB\WINCAMSTREAM\WIN\NATIVE\WCSNATIVEUI\BUILD\CMAKEFILES\66D02DBC4815C082194BA707EF3A1B1E\GENERATE.STAMP.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" "-SC:/Users/lilian.pigassou/OneDrive - Dashperf/Documents/GitHub/WinCamStream/Win/Native/WcsNativeUi" "-BC:/Users/lilian.pigassou/OneDrive - Dashperf/Documents/GitHub/WinCamStream/Win/Native/WcsNativeUi/build" --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file "C:/Users/lilian.pigassou/OneDrive - Dashperf/Documents/GitHub/WinCamStream/Win/Native/WcsNativeUi/build/wcs_native_ui.slnx"
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

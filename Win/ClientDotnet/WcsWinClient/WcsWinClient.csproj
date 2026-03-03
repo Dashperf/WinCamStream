@@ -13,6 +13,18 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <TargetPath>%(Filename)%(Extension)</TargetPath>
     </None>
+    <None Include="..\..\Native\Runtime\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <TargetPath>%(Filename)%(Extension)</TargetPath>
+    </None>
+    <None Include="..\..\VCam\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <TargetPath>%(Filename)%(Extension)</TargetPath>
+    </None>
+    <None Include="..\..\VCam\UnityCapture\Install\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <TargetPath>UnityCapture\%(Filename)%(Extension)</TargetPath>
+    </None>
     <None Include="..\..\ffmpeg-master-latest-win64-gpl-shared\bin\*.exe;..\..\ffmpeg-master-latest-win64-gpl-shared\bin\*.dll">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <TargetPath>%(Filename)%(Extension)</TargetPath>

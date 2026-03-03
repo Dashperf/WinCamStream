@@ -12,6 +12,8 @@ See:
 - `docs/windows-client-roadmap.md`
 - `docs/windows-client-v1.md`
 - `docs/windows-client-dotnet.md`
+- `docs/windows-client-native.md`
 - `tools/wcs_control.py` (quick control client)
 - `Win/Client/wcs-client.ps1` (Windows GUI client V1)
 - `Win/ClientDotnet/WcsWinClient` (Windows GUI client .NET V1)
+- `Win/Native/Runtime` (Windows native C++ runtime tools)
