@@ -1,0 +1,3 @@
+C:/Users/lilian.pigassou/OneDrive - Dashperf/Documents/GitHub/WinCamStream/Win/Native/WcsNativeWinUILauncher/build/CMakeFiles/wcs_native_winui_launcher.dir
+C:/Users/lilian.pigassou/OneDrive - Dashperf/Documents/GitHub/WinCamStream/Win/Native/WcsNativeWinUILauncher/build/CMakeFiles/ALL_BUILD.dir
+C:/Users/lilian.pigassou/OneDrive - Dashperf/Documents/GitHub/WinCamStream/Win/Native/WcsNativeWinUILauncher/build/CMakeFiles/ZERO_CHECK.dir

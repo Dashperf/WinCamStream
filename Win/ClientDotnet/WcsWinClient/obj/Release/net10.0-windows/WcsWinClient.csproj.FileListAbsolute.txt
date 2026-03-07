@@ -241,3 +241,8 @@ C:\Users\lilian.pigassou\OneDrive - Dashperf\Documents\GitHub\WinCamStream\Win\C
 C:\Users\lilian.pigassou\OneDrive - Dashperf\Documents\GitHub\WinCamStream\Win\ClientDotnet\WcsWinClient\bin\Release\net10.0-windows\UnityCapture\Uninstall.bat
 C:\Users\lilian.pigassou\OneDrive - Dashperf\Documents\GitHub\WinCamStream\Win\ClientDotnet\WcsWinClient\bin\Release\net10.0-windows\UnityCapture\UnityCaptureFilter32.dll
 C:\Users\lilian.pigassou\OneDrive - Dashperf\Documents\GitHub\WinCamStream\Win\ClientDotnet\WcsWinClient\bin\Release\net10.0-windows\UnityCapture\UnityCaptureFilter64.dll
+C:\Users\lilian.pigassou\OneDrive - Dashperf\Documents\GitHub\WinCamStream\Win\ClientDotnet\WcsWinClient\bin\Release\net10.0-windows\wcs_native_client.exe
+C:\Users\lilian.pigassou\OneDrive - Dashperf\Documents\GitHub\WinCamStream\Win\ClientDotnet\WcsWinClient\bin\Release\net10.0-windows\wcs_native_ui.exe
+C:\Users\lilian.pigassou\OneDrive - Dashperf\Documents\GitHub\WinCamStream\Win\ClientDotnet\WcsWinClient\bin\Release\net10.0-windows\wcs_native_ui.exe.new
+C:\Users\lilian.pigassou\OneDrive - Dashperf\Documents\GitHub\WinCamStream\Win\ClientDotnet\WcsWinClient\bin\Release\net10.0-windows\wcs_native_vcam.exe
+C:\Users\lilian.pigassou\OneDrive - Dashperf\Documents\GitHub\WinCamStream\Win\ClientDotnet\WcsWinClient\bin\Release\net10.0-windows\wcs_native_vcam.exe.new

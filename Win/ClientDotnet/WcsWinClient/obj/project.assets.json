@@ -8,7 +8,8 @@
     "net10.0-windows7.0": []
   },
   "packageFolders": {
-    "C:\\Users\\lilian.pigassou\\.nuget\\packages\\": {}
+    "C:\\Users\\lilian.pigassou\\.nuget\\packages\\": {},
+    "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages": {}
   },
   "project": {
     "version": "1.0.0",
@@ -19,13 +20,19 @@
       "packagesPath": "C:\\Users\\lilian.pigassou\\.nuget\\packages\\",
       "outputPath": "C:\\Users\\lilian.pigassou\\OneDrive - Dashperf\\Documents\\GitHub\\WinCamStream\\Win\\ClientDotnet\\WcsWinClient\\obj\\",
       "projectStyle": "PackageReference",
+      "fallbackFolders": [
+        "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"
+      ],
       "configFilePaths": [
-        "C:\\Users\\lilian.pigassou\\AppData\\Roaming\\NuGet\\NuGet.Config"
+        "C:\\Users\\lilian.pigassou\\AppData\\Roaming\\NuGet\\NuGet.Config",
+        "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.FallbackLocation.config",
+        "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.Offline.config"
       ],
       "originalTargetFrameworks": [
         "net10.0-windows"
       ],
       "sources": {
+        "C:\\Program Files (x86)\\Microsoft SDKs\\NuGetPackages\\": {},
         "https://api.nuget.org/v3/index.json": {}
       },
       "frameworks": {

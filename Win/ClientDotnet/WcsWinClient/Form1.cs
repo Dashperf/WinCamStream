@@ -829,16 +829,15 @@ public partial class Form1 : Form
                 };
                 info.ArgumentList.Add("--url");
                 info.ArgumentList.Add(uri);
-                info.ArgumentList.Add("--width");
-                info.ArgumentList.Add(width.ToString(CultureInfo.InvariantCulture));
-                info.ArgumentList.Add("--height");
-                info.ArgumentList.Add(height.ToString(CultureInfo.InvariantCulture));
-                info.ArgumentList.Add("--fps");
-                info.ArgumentList.Add(fps.ToString(CultureInfo.InvariantCulture));
                 info.ArgumentList.Add("--cap");
+                info.ArgumentList.Add("0");
+                info.ArgumentList.Add("--resize-mode");
+                info.ArgumentList.Add("linear");
+                info.ArgumentList.Add("--timeout-ms");
                 info.ArgumentList.Add("0");
                 _vcamProcess = StartLoggedBackgroundProcess(info, "vcam-native");
                 Log($"VCam native bridge started with {nativeExe}.");
+                Log("VCam native mode: dynamic source resolution + linear resize compatibility.");
                 Log("Select 'Unity Video Capture' in Teams/Zoom/Meet/Streamlabs.");
                 return;
             }

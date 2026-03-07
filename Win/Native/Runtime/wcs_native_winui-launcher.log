@@ -1,0 +1,50 @@
+[2026-03-03 22:57:51.390] Launcher started.
+[2026-03-03 22:57:51.394] Runtime root: C:\Users\lilian.pigassou\OneDrive - Dashperf\Documents\GitHub\WinCamStream\Win\Native\Runtime
+[2026-03-03 22:57:51.395] Target exe: C:\Users\lilian.pigassou\OneDrive - Dashperf\Documents\GitHub\WinCamStream\Win\Native\Runtime\WcsNativeWinUI\WcsNativeWinUI.exe
+[2026-03-03 22:57:51.469] CreateProcess OK. pid=6120
+[2026-03-03 22:57:56.472] Child still running after quick check.
+[2026-03-03 22:57:56.474] Launcher finished.
+[2026-03-03 22:58:40.625] Launcher started.
+[2026-03-03 22:58:40.625] Runtime root: C:\Users\lilian.pigassou\OneDrive - Dashperf\Documents\GitHub\WinCamStream\Win\Native\Runtime
+[2026-03-03 22:58:40.626] Target exe: C:\Users\lilian.pigassou\OneDrive - Dashperf\Documents\GitHub\WinCamStream\Win\Native\Runtime\WcsNativeWinUI\WcsNativeWinUI.exe
+[2026-03-03 22:58:40.635] CreateProcess OK. pid=7500
+[2026-03-03 22:58:45.648] Child still running after quick check.
+[2026-03-03 22:58:45.649] Launcher finished.
+[2026-03-03 23:08:24.640] Launcher started.
+[2026-03-03 23:08:24.641] Runtime root: C:\Users\lilian.pigassou\OneDrive - Dashperf\Documents\GitHub\WinCamStream\Win\Native\Runtime
+[2026-03-03 23:08:24.641] Target exe: C:\Users\lilian.pigassou\OneDrive - Dashperf\Documents\GitHub\WinCamStream\Win\Native\Runtime\WcsNativeWinUI\WcsNativeWinUI.exe
+[2026-03-03 23:08:24.705] CreateProcess OK. pid=31528
+[2026-03-03 23:21:11.480] Launcher started.
+[2026-03-03 23:21:11.481] Runtime root: C:\Users\lilian.pigassou\OneDrive - Dashperf\Documents\GitHub\WinCamStream\Win\Native\Runtime
+[2026-03-03 23:21:11.482] Target exe: C:\Users\lilian.pigassou\OneDrive - Dashperf\Documents\GitHub\WinCamStream\Win\Native\Runtime\WcsNativeWinUI\WcsNativeWinUI.exe
+[2026-03-03 23:21:11.555] CreateProcess OK. pid=30768
+[2026-03-03 23:22:03.880] Launcher started.
+[2026-03-03 23:22:03.881] Runtime root: C:\Users\lilian.pigassou\OneDrive - Dashperf\Documents\GitHub\WinCamStream\Win\Native\Runtime
+[2026-03-03 23:22:03.881] Target exe: C:\Users\lilian.pigassou\OneDrive - Dashperf\Documents\GitHub\WinCamStream\Win\Native\Runtime\WcsNativeWinUI\WcsNativeWinUI.exe
+[2026-03-03 23:22:03.891] CreateProcess OK. pid=25436
+[2026-03-03 23:33:53.875] Launcher started.
+[2026-03-03 23:33:53.876] Runtime root: C:\Users\lilian.pigassou\OneDrive - Dashperf\Documents\GitHub\WinCamStream\Win\Native\Runtime
+[2026-03-03 23:33:53.876] Target exe: C:\Users\lilian.pigassou\OneDrive - Dashperf\Documents\GitHub\WinCamStream\Win\Native\Runtime\WcsNativeWinUI\WcsNativeWinUI.exe
+[2026-03-03 23:33:53.951] CreateProcess OK. pid=31392
+[2026-03-03 23:48:23.240] Launcher started.
+[2026-03-03 23:48:23.241] Runtime root: C:\Users\lilian.pigassou\OneDrive - Dashperf\Documents\GitHub\WinCamStream\Win\Native\Runtime
+[2026-03-03 23:48:23.241] Target exe: C:\Users\lilian.pigassou\OneDrive - Dashperf\Documents\GitHub\WinCamStream\Win\Native\Runtime\WcsNativeWinUI\WcsNativeWinUI.exe
+[2026-03-03 23:48:23.299] CreateProcess OK. pid=28596
+[2026-03-03 23:48:28.310] Child still running after quick check.
+[2026-03-03 23:48:28.310] Launcher finished.
+[2026-03-03 23:55:13.036] Launcher started.
+[2026-03-03 23:55:13.036] Runtime root: C:\Users\lilian.pigassou\OneDrive - Dashperf\Documents\GitHub\WinCamStream\Win\Native\Runtime
+[2026-03-03 23:55:13.037] Target exe: C:\Users\lilian.pigassou\OneDrive - Dashperf\Documents\GitHub\WinCamStream\Win\Native\Runtime\WcsNativeWinUI\WcsNativeWinUI.exe
+[2026-03-03 23:55:13.092] CreateProcess OK. pid=9248
+[2026-03-03 23:55:18.106] Child still running after quick check.
+[2026-03-03 23:55:18.106] Launcher finished.
+[2026-03-04 01:48:48.341] Launcher started.
+[2026-03-04 01:48:48.342] Runtime root: C:\Users\lilian.pigassou\OneDrive - Dashperf\Documents\GitHub\WinCamStream\Win\Native\Runtime
+[2026-03-04 01:48:48.343] Target exe: C:\Users\lilian.pigassou\OneDrive - Dashperf\Documents\GitHub\WinCamStream\Win\Native\Runtime\WcsNativeWinUI\WcsNativeWinUI.exe
+[2026-03-04 01:48:48.358] CreateProcess OK. pid=36696
+[2026-03-04 01:48:50.809] Child exited quickly. code=3221226107
+[2026-03-04 01:48:54.085] Launcher started.
+[2026-03-04 01:48:54.085] Runtime root: C:\Users\lilian.pigassou\OneDrive - Dashperf\Documents\GitHub\WinCamStream\Win\Native\Runtime
+[2026-03-04 01:48:54.086] Target exe: C:\Users\lilian.pigassou\OneDrive - Dashperf\Documents\GitHub\WinCamStream\Win\Native\Runtime\WcsNativeWinUI\WcsNativeWinUI.exe
+[2026-03-04 01:48:54.098] CreateProcess OK. pid=34260
+[2026-03-04 01:48:56.595] Child exited quickly. code=3221226107

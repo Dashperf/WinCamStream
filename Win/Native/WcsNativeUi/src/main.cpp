@@ -554,16 +554,10 @@ void StartVcam(AppState& s) {
 
     const std::string host = Trim(GetTextA(s.host)).empty() ? "127.0.0.1" : Trim(GetTextA(s.host));
     const int video_port = std::clamp(ParseIntOr(Trim(GetTextA(s.video_port)), 5000), 1, 65535);
-    const auto res = ComboText(s.resolution);
-    int width = 1920, height = 1080;
-    if (_stricmp(res.c_str(), "720p") == 0) { width = 1280; height = 720; }
-    else if (_stricmp(res.c_str(), "4k") == 0 || _stricmp(res.c_str(), "2160p") == 0) { width = 3840; height = 2160; }
-    const int fps = std::clamp(ParseIntOr(Trim(GetTextA(s.fps)), 60), 1, 240);
     const std::string uri = "tcp://" + host + ":" + std::to_string(video_port) + "?tcp_nodelay=1";
-    const std::string args =
-        "--url \"" + uri + "\" --width " + std::to_string(width) + " --height " + std::to_string(height) +
-        " --fps " + std::to_string(fps) + " --cap 0";
+    const std::string args = "--url \"" + uri + "\" --cap 0 --resize-mode linear --timeout-ms 0";
     if (LaunchProcess(exe, args, true, s.vcam, "vcam-native", s)) {
+        AppendLog(s, "VCam started in dynamic mode (auto source resolution + linear resize compatibility).");
         AppendLog(s, "Select 'Unity Video Capture' in target app.");
     }
 }

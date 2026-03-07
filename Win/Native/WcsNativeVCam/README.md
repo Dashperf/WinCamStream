@@ -24,8 +24,11 @@ Win/Native/Runtime/wcs_native_vcam.exe --url "tcp://127.0.0.1:5000?tcp_nodelay=1
 
 Options:
 - `--cap N` UnityCapture device index (default `0`)
+- `--resize-mode linear|disabled` (default `linear`)
+- `--timeout-ms N` stale-frame threshold (default `0`, interpreted as hold-last-frame mode)
 - `--reconnect-ms N` reconnect delay (default `300`)
 
 ## Notes
 - Requires UnityCapture virtual camera installed and opened by a receiver app.
 - Max shared image size follows UnityCapture limits (4K RGBA).
+- For dynamic source resolution (recommended), omit `--width/--height`.

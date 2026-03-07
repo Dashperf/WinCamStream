@@ -1,0 +1,112 @@
+PackageIdentifier: Apple.AppleMobileDeviceSupport
+PackageVersion: 19.0.1.27
+Tags:
+- ipad
+- iphone
+- ipod
+- itunes
+- amds
+- apple-mobile-device-support
+- applemobiledeviceservice
+- apple-mobile-device-service
+- applemobiledevicesubdriver
+- apple-mobile-device-sub-driver
+- applemobiledevicehelper
+- applesyncmapiinterfacehelper
+- distnoted
+- systemprocess
+PackageLocale: en-US
+Author: Apple Inc.
+Copyright: "\xA9 2025 Apple Inc. All rights reserved."
+CopyrightUrl: https://www.apple.com/legal/intellectual-property/
+ShortDescription: Standalone frontend for iTunes connections to iPhone, iPad, and
+  iPod.
+License: Proprietary
+PackageName: Apple Mobile Device Support
+PrivacyUrl: https://www.apple.com/privacy/
+Publisher: Apple Inc.
+PublisherSupportUrl: https://support.apple.com/
+PublisherUrl: https://www.apple.com/
+Localization:
+- Tags:
+  - ipad
+  - iphone
+  - ipod
+  - itunes
+  PackageLocale: zh-CN
+  Author: Apple Inc.
+  Copyright: "\xA9 2024 Apple Inc. \u4FDD\u7559\u4E00\u5207\u6743\u5229\u3002"
+  CopyrightUrl: https://www.apple.com/legal/intellectual-property/
+  ShortDescription: "\u4E3A Apple \u79FB\u52A8\u8BBE\u5907\u63D0\u4F9B\u63A5\u53E3"
+  License: "\u4E13\u6709\u8F6F\u4EF6"
+  PackageName: Apple Mobile Device Support
+  PrivacyUrl: https://www.apple.com/privacy/
+  Publisher: Apple Inc.
+  PublisherSupportUrl: https://support.apple.com/
+  PublisherUrl: https://www.apple.com/
+Installers:
+- Architecture: x64
+  InstallerType: wix
+  InstallerSha256: 9a3f4f68edbc03f0a725acd5527f460a36bb2b2c5512541a1f800123c70f4a17
+  InstallerUrl: https://swcdn.apple.com/content/downloads/38/57/093-86907/b932sg12jwbrqrvm5vpfq1udwqwvipi3wo/AppleMobileDeviceSupport64.msi
+  Scope: machine
+  InstallerAbortsTerminal: false
+  InstallLocationRequired: false
+  RequireExplicitUpgrade: false
+  DisplayInstallWarnings: false
+  DownloadCommandProhibited: false
+  ArchiveBinariesDependOnPath: false
+  ProductCode: '{B9292776-A87E-404C-8569-72CEC689F6C6}'
+  UpgradeBehavior: install
+  AppsAndFeaturesEntries:
+  - ProductCode: '{B9292776-A87E-404C-8569-72CEC689F6C6}'
+    UpgradeCode: '{5CF0656E-F3B8-11DB-BA81-804E56D89593}'
+  ExpectedReturnCodes:
+  - InstallerReturnCode: 87
+    ReturnResponse: invalidParameter
+  - InstallerReturnCode: 112
+    ReturnResponse: diskFull
+  - InstallerReturnCode: 1601
+    ReturnResponse: contactSupport
+  - InstallerReturnCode: 1602
+    ReturnResponse: cancelledByUser
+  - InstallerReturnCode: 1618
+    ReturnResponse: installInProgress
+  - InstallerReturnCode: 1623
+    ReturnResponse: systemNotSupported
+  - InstallerReturnCode: 1625
+    ReturnResponse: blockedByPolicy
+  - InstallerReturnCode: 1628
+    ReturnResponse: invalidParameter
+  - InstallerReturnCode: 1633
+    ReturnResponse: systemNotSupported
+  - InstallerReturnCode: 1638
+    ReturnResponse: alreadyInstalled
+  - InstallerReturnCode: 1639
+    ReturnResponse: invalidParameter
+  - InstallerReturnCode: 1640
+    ReturnResponse: blockedByPolicy
+  - InstallerReturnCode: 1641
+    ReturnResponse: rebootInitiated
+  - InstallerReturnCode: 1643
+    ReturnResponse: blockedByPolicy
+  - InstallerReturnCode: 1644
+    ReturnResponse: blockedByPolicy
+  - InstallerReturnCode: 1649
+    ReturnResponse: blockedByPolicy
+  - InstallerReturnCode: 1650
+    ReturnResponse: invalidParameter
+  - InstallerReturnCode: 1654
+    ReturnResponse: systemNotSupported
+  - InstallerReturnCode: 3010
+    ReturnResponse: rebootRequiredToFinish
+  InstallerSwitches:
+    Silent: /quiet /norestart
+    SilentWithProgress: /passive /norestart
+    Log: /log "<LOGPATH>"
+    InstallLocation: TARGETDIR="<INSTALLPATH>"
+  UnsupportedOSArchitectures:
+  - arm
+  - x86
+ManifestVersion: 1.10.0
+ManifestType: merged

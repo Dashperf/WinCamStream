@@ -1,0 +1,20 @@
+﻿<Application
+    x:Class="WcsNativeWinUI.App"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:WcsNativeWinUI"
+    xmlns:controls="using:Microsoft.UI.Xaml.Controls">
+    <Application.Resources>
+        <ResourceDictionary>
+            <!-- Fallback keys to avoid startup crash if WinUI theme resources fail to resolve on some machines. -->
+            <SolidColorBrush x:Key="TabViewScrollButtonBackground" Color="#00000000" />
+            <SolidColorBrush x:Key="TabViewScrollButtonBackgroundPressed" Color="#22000000" />
+            <SolidColorBrush x:Key="TabViewScrollButtonBackgroundPointerOver" Color="#16000000" />
+            <SolidColorBrush x:Key="TabViewScrollButtonBackgroundDisabled" Color="#00000000" />
+            <ResourceDictionary.MergedDictionaries>
+                <controls:XamlControlsResources />
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>
+

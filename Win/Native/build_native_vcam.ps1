@@ -49,6 +49,13 @@ if (-not $exePath) {
 }
 
 New-Item -ItemType Directory -Path $runtimeDir -Force | Out-Null
-Copy-Item -Path $exePath -Destination (Join-Path $runtimeDir "wcs_native_vcam.exe") -Force
+$dest = Join-Path $runtimeDir "wcs_native_vcam.exe"
+try {
+    Copy-Item -Path $exePath -Destination $dest -Force
+} catch {
+    $alt = "$dest.new"
+    Copy-Item -Path $exePath -Destination $alt -Force
+    Write-Warning "Target in use, wrote updated binary to $alt"
+}
 
 Write-Host "Native VCam bridge ready: $(Join-Path $runtimeDir 'wcs_native_vcam.exe')"

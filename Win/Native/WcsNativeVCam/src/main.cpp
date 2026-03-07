@@ -1,6 +1,8 @@
 #include <windows.h>
 
+#include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
@@ -49,7 +51,21 @@ struct Args {
     int height = 0;
     int fps = 0;
     int reconnect_ms = 300;
+    int timeout_ms = 0;
+    bool resize_linear = true;
 };
+
+constexpr int kUnityReceivePollMs = 200;
+constexpr int kTimeoutHoldLastFrameMs = 60'000;
+
+int EffectiveUnityTimeoutMs(int requested_timeout_ms) {
+    // UnityCapture treats timeout as "stale frame threshold".
+    // timeout=0 would trigger its "sending stopped" pattern almost immediately.
+    if (requested_timeout_ms <= 0) {
+        return kTimeoutHoldLastFrameMs;
+    }
+    return (requested_timeout_ms > kUnityReceivePollMs) ? requested_timeout_ms : kUnityReceivePollMs;
+}
 
 void PrintUsage(const char* exe) {
     std::cout
@@ -59,6 +75,8 @@ void PrintUsage(const char* exe) {
         << "  --width <W>               output width (default: source width)\n"
         << "  --height <H>              output height (default: source height)\n"
         << "  --fps <N>                 output frame pacing (0 = no pacing)\n"
+        << "  --resize-mode <linear|disabled>  default: linear\n"
+        << "  --timeout-ms <N>          stale-frame threshold (0 = hold last frame)\n"
         << "  --reconnect-ms <N>        reconnect delay in ms (default: 300)\n"
         << "  --help                    show this help\n";
 }
@@ -130,6 +148,29 @@ bool ParseArgs(int argc, char** argv, Args& args) {
             const char* v = require_value("--reconnect-ms");
             if (!v || !ParseInt(v, args.reconnect_ms) || args.reconnect_ms < 10) {
                 std::cerr << "Invalid --reconnect-ms value\n";
+                return false;
+            }
+            continue;
+        }
+        if (a == "--timeout-ms") {
+            const char* v = require_value("--timeout-ms");
+            if (!v || !ParseInt(v, args.timeout_ms) || args.timeout_ms < 0 || args.timeout_ms > 60000) {
+                std::cerr << "Invalid --timeout-ms value\n";
+                return false;
+            }
+            continue;
+        }
+        if (a == "--resize-mode") {
+            const char* v = require_value("--resize-mode");
+            if (!v) return false;
+            std::string mode = v;
+            std::transform(mode.begin(), mode.end(), mode.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (mode == "linear") {
+                args.resize_linear = true;
+            } else if (mode == "disabled") {
+                args.resize_linear = false;
+            } else {
+                std::cerr << "Invalid --resize-mode value (use linear|disabled)\n";
                 return false;
             }
             continue;
@@ -415,9 +456,12 @@ int main(int argc, char** argv) {
     avformat_network_init();
 
     std::cout << "wcs_native_vcam starting\n";
+    const int effective_timeout_ms = EffectiveUnityTimeoutMs(args.timeout_ms);
     std::cout << "url=" << args.url << " cap=" << args.cap_num;
     if (args.width > 0 && args.height > 0) std::cout << " out=" << args.width << "x" << args.height;
     if (args.fps > 0) std::cout << " fps_cap=" << args.fps;
+    std::cout << " resize=" << (args.resize_linear ? "linear" : "disabled");
+    std::cout << " timeout_ms=" << args.timeout_ms << " (effective=" << effective_timeout_ms << ")";
     std::cout << "\n";
 
     SharedImageMemory sender(args.cap_num);
@@ -515,9 +559,9 @@ int main(int argc, char** argv) {
                     dec.dst_linesize[0] / 4,
                     data_size,
                     SharedImageMemory::FORMAT_UINT8,
-                    SharedImageMemory::RESIZEMODE_DISABLED,
+                    args.resize_linear ? SharedImageMemory::RESIZEMODE_LINEAR : SharedImageMemory::RESIZEMODE_DISABLED,
                     SharedImageMemory::MIRRORMODE_DISABLED,
-                    1000,
+                    effective_timeout_ms,
                     dec.rgba.data());
 
                 if (send_res == SharedImageMemory::SENDRES_TOOLARGE) {

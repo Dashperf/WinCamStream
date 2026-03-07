@@ -1,15 +1,30 @@
+param(
+    [switch]$FetchAppleUsb
+)
+
 $ErrorActionPreference = "Stop"
 
 $winRoot = Split-Path -Parent $PSScriptRoot
 
 Write-Host "Building native VCam bridge..."
 powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "build_native_vcam.ps1")
+if ($LASTEXITCODE -ne 0) { throw "build_native_vcam.ps1 failed." }
 
 Write-Host "Building native control client..."
 powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "build_native_client.ps1")
+if ($LASTEXITCODE -ne 0) { throw "build_native_client.ps1 failed." }
 
 Write-Host "Building native UI..."
 powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "build_native_ui.ps1")
+if ($LASTEXITCODE -ne 0) { throw "build_native_ui.ps1 failed." }
+
+Write-Host "Building native WinUI..."
+if ($FetchAppleUsb) {
+    powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "build_native_winui.ps1") -FetchAppleUsb
+} else {
+    powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "build_native_winui.ps1")
+}
+if ($LASTEXITCODE -ne 0) { throw "build_native_winui.ps1 failed." }
 
 $runtimeDir = Join-Path $winRoot "Native\Runtime"
 New-Item -ItemType Directory -Path $runtimeDir -Force | Out-Null
@@ -42,12 +57,41 @@ $copyList = @(
 foreach ($rel in $copyList) {
     $src = Join-Path $winRoot $rel
     if (Test-Path $src) {
-        Copy-Item -Path $src -Destination (Join-Path $runtimeDir (Split-Path $src -Leaf)) -Force
+        $dest = Join-Path $runtimeDir (Split-Path $src -Leaf)
+        try {
+            Copy-Item -Path $src -Destination $dest -Force
+        } catch {
+            Write-Warning "Skip copy (in use): $dest"
+        }
+    }
+}
+
+$depsSource = Join-Path $winRoot "Deps"
+$depsTarget = Join-Path $runtimeDir "Deps"
+if (Test-Path $depsSource) {
+    New-Item -ItemType Directory -Path $depsTarget -Force | Out-Null
+    Get-ChildItem -Path $depsSource -File | Where-Object {
+        $_.Name -match 'Apple.*(Mobile|Device).*(Support|Driver).*\.(msi|exe)$'
+    } | ForEach-Object {
+        $dest = Join-Path $depsTarget $_.Name
+        try {
+            Copy-Item -Path $_.FullName -Destination $dest -Force
+            Write-Host "Embedded Apple dependency copied: $($_.Name)"
+        } catch {
+            Write-Warning "Skip copy (in use): $dest"
+        }
     }
 }
 
 $unityInstallDir = Join-Path $runtimeDir "UnityCapture"
 New-Item -ItemType Directory -Path $unityInstallDir -Force | Out-Null
-Copy-Item -Path (Join-Path $winRoot "VCam\UnityCapture\Install\*") -Destination $unityInstallDir -Force
+Get-ChildItem -Path (Join-Path $winRoot "VCam\UnityCapture\Install") -File | ForEach-Object {
+    $dest = Join-Path $unityInstallDir $_.Name
+    try {
+        Copy-Item -Path $_.FullName -Destination $dest -Force
+    } catch {
+        Write-Warning "Skip copy (in use): $dest"
+    }
+}
 
 Write-Host "Native runtime package ready: $runtimeDir"

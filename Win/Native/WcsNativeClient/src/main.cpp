@@ -27,9 +27,9 @@ struct Args {
     bool preview = false;
     bool start_vcam = false;
     bool wait_after_spawn = false;
-    int width = 1920;
-    int height = 1080;
-    int fps = 60;
+    int width = 0;
+    int height = 0;
+    int fps = 0;
     std::string iproxy_path;
     std::string ffplay_path;
     std::string vcam_path;
@@ -73,8 +73,8 @@ void PrintUsage(const char* exe) {
         << "  --start-iproxy                start iproxy tunnels (video+control)\n"
         << "  --preview                     start ffplay preview\n"
         << "  --start-vcam                  start native vcam bridge\n"
-        << "  --width <W> --height <H>      vcam output size (default 1920x1080)\n"
-        << "  --fps <N>                     vcam pacing fps (default 60)\n"
+        << "  --width <W> --height <H>      vcam output size (default: source size)\n"
+        << "  --fps <N>                     vcam pacing fps (default 0 = no cap)\n"
         << "  --iproxy-path <path>\n"
         << "  --ffplay-path <path>\n"
         << "  --vcam-path <path>\n"
@@ -166,7 +166,11 @@ bool ParseArgs(int argc, char** argv, Args& a) {
         std::cerr << "Invalid ports.\n";
         return false;
     }
-    if (a.width <= 0 || a.height <= 0 || a.width > 3840 || a.height > 2160 || a.fps < 0 || a.fps > 240) {
+    if ((a.width > 0 && a.height == 0) || (a.height > 0 && a.width == 0)) {
+        std::cerr << "--width and --height must be set together.\n";
+        return false;
+    }
+    if (a.width < 0 || a.height < 0 || a.width > 3840 || a.height > 2160 || a.fps < 0 || a.fps > 240) {
         std::cerr << "Invalid width/height/fps.\n";
         return false;
     }
@@ -420,9 +424,13 @@ int main(int argc, char** argv) {
         }
         const std::string uri = "tcp://" + a.host + ":" + std::to_string(a.video_port) + "?tcp_nodelay=1";
         ChildProcess p{};
-        const std::string vcam_args =
-            "--url \"" + uri + "\" --width " + std::to_string(a.width) + " --height " + std::to_string(a.height) +
-            " --fps " + std::to_string(a.fps) + " --cap 0";
+        std::string vcam_args = "--url \"" + uri + "\" --cap 0 --resize-mode linear --timeout-ms 0";
+        if (a.width > 0 && a.height > 0) {
+            vcam_args += " --width " + std::to_string(a.width) + " --height " + std::to_string(a.height);
+        }
+        if (a.fps > 0) {
+            vcam_args += " --fps " + std::to_string(a.fps);
+        }
         if (!LaunchBackgroundProcess(vcam, vcam_args, p, "vcam-native")) {
             return 1;
         }
